@@ -165,7 +165,7 @@ def get_country_info(phone_number):
     return ("Global Node", "🌐", "UN")
 
 
-MONGO_URI = os.environ.get("MONGO_URI", "mongodb+srv://tgproesay8273_db_user:m_otpnumber_bot@cluster0.gtv25c1.mongodb.net/?appName=Cluster0") # REPLACE THIS
+MONGO_URI = os.environ.get("MONGO_URI", "mongodb+srv://tgproesay8273_db_user:m_otpnumber_bot@cluster0.gtv25c1.mongodb.net/?appName=Cluster0")
 try:
     mongo_client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
     db = mongo_client.bot_database
@@ -193,18 +193,8 @@ def init_db():
         if not db.config.find_one({"key": k}):
             db.config.insert_one({"key": k, "value": v})
             
-    has_primary = False
-    for adm in db.admins.find():
-        if adm.get('permissions') and '"fullaccess"' in adm['permissions']:
-            has_primary = True
-            break
-            
-    if not has_primary:
-        founder = db.admins.find_one({"user_id": str(PRIMARY_ADMIN_ID)})
-        if not founder:
-            db.admins.insert_one({"user_id": str(PRIMARY_ADMIN_ID), "permissions": '["fullaccess"]'})
-        else:
-            db.admins.update_one({"user_id": str(PRIMARY_ADMIN_ID)}, {"$set": {"permissions": '["fullaccess"]'}})
+    if not db.admins.find_one({"user_id": str(PRIMARY_ADMIN_ID)}):
+        db.admins.insert_one({"user_id": str(PRIMARY_ADMIN_ID), "permissions": "[]"})
         
     if db.services.count_documents({}) == 0:
         db.services.insert_many([
@@ -236,18 +226,17 @@ def set_config(key, value):
     db.config.update_one({"key": key}, {"$set": {"value": str(value)}}, upsert=True)
 
 def is_admin(user_id):
+    if str(user_id) == str(PRIMARY_ADMIN_ID): return True
     return bool(db.admins.find_one({"user_id": str(user_id)}))
 
 def is_primary_admin(user_id):
+    if str(user_id) == str(PRIMARY_ADMIN_ID): return True
     row = db.admins.find_one({"user_id": str(user_id)})
-    if row:
-        if str(user_id) == str(PRIMARY_ADMIN_ID):
-            return True
-        if row.get('permissions'):
-            try:
-                perms = json.loads(row['permissions'])
-                if "fullaccess" in perms: return True
-            except: pass
+    if row and row.get('permissions'):
+        try:
+            perms = json.loads(row['permissions'])
+            if "fullaccess" in perms: return True
+        except: pass
     return False
 
 def has_permission(user_id, perm):
@@ -313,8 +302,7 @@ def register_user(user_id, username="User", referred_by=None):
 def check_join(user_id):
     if is_admin(user_id): return True
     try:
-        channel_1 = get_config("force_channel_1", FORCE_CHANNEL)
-        chat_member_1 = bot.get_chat_member(channel_1, user_id)
+        chat_member_1 = bot.get_chat_member(FORCE_CHANNEL, user_id)
         
         group_2_username = get_config("otp_group_username", FORCE_CHANNEL_2)
         chat_member_2 = bot.get_chat_member(group_2_username, user_id)
@@ -326,29 +314,29 @@ def check_join(user_id):
     except Exception as e:
         logger.error(f"Force Join Check Error: {e}")
         print(f"Force Join Check Error for user {user_id}: {e}")
-        # If the bot is not admin or fails to check, block the user.
-        return False
+        # If the bot is not admin in the channel, it throws an exception.
+        # Returning True to not block the user.
+        return True
 
 def force_join_keyboard():
     markup = types.InlineKeyboardMarkup(row_width=1)
-    link_1 = get_config("force_link_1", FORCE_CHANNEL_LINK)
     otp_link = get_config("otp_group_link", FORCE_CHANNEL_LINK_2)
-    
-    markup.add(types.InlineKeyboardButton("📢 Join Channel", url=link_1, style="success"))
-    markup.add(types.InlineKeyboardButton("📢 Join OTP Group", url=otp_link, style="success"))
-        
-    markup.add(types.InlineKeyboardButton("✅ Verify Access", callback_data="check_verified", style="success"))
+    markup.add(
+        types.InlineKeyboardButton("📢 Join Official Channel", url=FORCE_CHANNEL_LINK, style="success"),
+        types.InlineKeyboardButton("📢 Join OTP Group", url=otp_link, style="success"),
+        types.InlineKeyboardButton("✅ Verify Access", callback_data="check_verified", style="success")
+    )
     return markup
 
 
 def cancel_markup():
     markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("? Cancel", callback_data="cancel_step", style="danger"))
+    markup.add(types.InlineKeyboardButton("❌ Cancel", callback_data="cancel_step", style="danger"))
     return markup
 
 def reply_cancel_markup():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
-    markup.add(types.KeyboardButton("? Cancel", style="danger"))
+    markup.add(types.KeyboardButton("❌ Cancel", style="danger"))
     return markup
 
 def main_menu_keyboard(user_id):
@@ -357,10 +345,13 @@ def main_menu_keyboard(user_id):
     btn_balance = types.KeyboardButton("💳 My Wallet", style="primary")
     btn_refer = types.KeyboardButton("🎁 Refer & Earn", style="primary")
     btn_leaderboard = types.KeyboardButton("🏆 Leaderboard", style="primary")
+    btn_2fa = types.KeyboardButton("🔐 Get 2FA", style="primary")
+    btn_support = types.KeyboardButton("🎧 Support", style="danger")
     
     markup.add(btn_number)
     markup.add(btn_balance, btn_refer)
-    markup.add(btn_leaderboard)
+    markup.add(btn_leaderboard, btn_2fa)
+    markup.add(btn_support)
     
     if is_admin(user_id):
         btn_admin = types.KeyboardButton("👑 Admin Console", style="primary")
@@ -370,7 +361,9 @@ def main_menu_keyboard(user_id):
 
 def service_menu_keyboard():
     markup = types.InlineKeyboardMarkup(row_width=1)
-    services = db.services.distinct("service_name")
+    active_panel = get_active_panel()
+    active_pname = active_panel.get('panel_name', 'Zenex')
+    services = db.services.distinct("service_name", {"panel_name": active_pname})
         
     for srv_name in services:
         icon = "📸" if "instagram" in srv_name.lower() else "📘" if "facebook" in srv_name.lower() else "💬"
@@ -380,11 +373,14 @@ def service_menu_keyboard():
 
 def country_menu_keyboard(service_name):
     markup = types.InlineKeyboardMarkup(row_width=2)
-    best_range = db.services.find_one({"service_name": service_name}, sort=[("hits", -1)])
+    active_panel = get_active_panel()
+    active_pname = active_panel.get('panel_name', 'Zenex')
+    
+    best_range = db.services.find_one({"service_name": service_name, "panel_name": active_pname}, sort=[("hits", -1)])
     if best_range:
         markup.add(types.InlineKeyboardButton("🔥 Auto Best Route", callback_data=f"sel_{service_name}_AUTO-BEST", style="primary"))
         
-    countries = list(db.services.find({"service_name": service_name}).sort([("hits", -1)]).limit(2))
+    countries = list(db.services.find({"service_name": service_name, "panel_name": active_pname, "hits": {"$gt": 0}}).sort([("hits", -1)]).limit(60))
     
     country_totals = {}
     for c in countries:
@@ -409,10 +405,18 @@ def country_menu_keyboard(service_name):
             display_name = f"👑 {display_name}"
             
         c_name = f"{display_name} | {hits_part}" if hits_part else display_name
-        
-        c_range = c.get('range', '')
-        cb_data = f"sel_{service_name}_RNG_{c_range}"
-        buttons.append(types.InlineKeyboardButton(c_name, callback_data=cb_data, style="danger"))
+        import re
+        digits = re.findall(r'\d+', hits_part)
+        hits_num = int(digits[0]) if digits else 0
+        if hits_num > 15:
+            c_name = f"🔥 BOOM: {c_name}"
+            
+            c_range = c.get('range', '')
+            base_cb = f"sel_{service_name}_RNG_"
+            if len(base_cb.encode('utf-8')) + len(c_range.encode('utf-8')) > 64:
+                c_range = c_range.encode('utf-8')[:64 - len(base_cb.encode('utf-8'))].decode('utf-8', 'ignore')
+            cb_data = f"{base_cb}{c_range}"
+            buttons.append(types.InlineKeyboardButton(c_name, callback_data=cb_data, style="danger"))
         
     for btn in buttons:
         markup.add(btn)
@@ -442,7 +446,6 @@ def admin_panel_keyboard(user_id):
     buttons.append(types.InlineKeyboardButton("📦 Bulk Get Numbers", callback_data="adm_bulk_order", style="primary"))
     buttons.append(types.InlineKeyboardButton("📊 View Stats", callback_data="adm_stats", style="primary"))
     buttons.append(types.InlineKeyboardButton("⚠️ Stock Out Logs", callback_data="adm_stockouts", style="primary"))
-    buttons.append(types.InlineKeyboardButton("📈 OTP Stats", callback_data="adm_otp_stats_today", style="primary"))
     
     markup.add(*buttons)
     if is_primary_admin(user_id):
@@ -450,18 +453,15 @@ def admin_panel_keyboard(user_id):
         notif_text = "🔔 Notifications: ON" if notif_status == "1" else "🔕 Notifications: OFF"
         markup.add(
             types.InlineKeyboardButton("🔑 Set API Key", callback_data="adm_api_key", style="primary"),
-            types.InlineKeyboardButton("📢 Set Main Channel", callback_data="adm_main_channel", style="primary"),
-            types.InlineKeyboardButton("💬 Set OTP Button Link", callback_data="adm_otp_link", style="primary"),
+            types.InlineKeyboardButton("🔗 Set OTP Button Link", callback_data="adm_otp_link", style="primary"),
+            types.InlineKeyboardButton("📞 Set Support Link", callback_data="adm_support_link", style="primary"),
             types.InlineKeyboardButton("💬 Set OTP Forward Group", callback_data="adm_otp_group_id", style="primary"),
             types.InlineKeyboardButton("🎯 Edit Milestones", callback_data="adm_milestone", style="primary"),
             types.InlineKeyboardButton("👮‍♂️ Manage Team", callback_data="adm_manage_admins", style="primary"),
             types.InlineKeyboardButton("🎛 Manage Panels", callback_data="adm_panels_menu", style="primary"),
             types.InlineKeyboardButton(notif_text, callback_data="adm_toggle_notif", style="primary")
         )
-    markup.add(
-        types.InlineKeyboardButton("🚪 Leave Admin", callback_data="adm_resign", style="danger"),
-        types.InlineKeyboardButton("❌ Close", callback_data="cancel_step", style="danger")
-    )
+    markup.add(types.InlineKeyboardButton("❌ Close", callback_data="cancel_step", style="danger"))
     return markup
 
 def panels_menu_keyboard():
@@ -487,6 +487,36 @@ def panels_del_keyboard():
     markup.add(types.InlineKeyboardButton("❌ Close", callback_data="cancel_step", style="danger"))
     return markup
 
+def stats_date_keyboard():
+    import datetime
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    today = datetime.datetime.now().strftime("%Y-%m-%d")
+    yesterday = (datetime.datetime.now() - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+    day_2 = (datetime.datetime.now() - datetime.timedelta(days=2)).strftime("%Y-%m-%d")
+    day_3 = (datetime.datetime.now() - datetime.timedelta(days=3)).strftime("%Y-%m-%d")
+    day_4 = (datetime.datetime.now() - datetime.timedelta(days=4)).strftime("%Y-%m-%d")
+    
+    markup.add(
+        types.InlineKeyboardButton("📅 Today", callback_data=f"statdate_{today}"),
+        types.InlineKeyboardButton("📅 Yesterday", callback_data=f"statdate_{yesterday}")
+    )
+    markup.add(
+        types.InlineKeyboardButton(f"📅 {day_2}", callback_data=f"statdate_{day_2}"),
+        types.InlineKeyboardButton(f"📅 {day_3}", callback_data=f"statdate_{day_3}")
+    )
+    markup.add(types.InlineKeyboardButton(f"📅 {day_4}", callback_data=f"statdate_{day_4}"))
+    markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="adm_back", style="danger"))
+    return markup
+
+
+def upload_txt_keyboard():
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    services = db.services.distinct("service_name")
+    for s in services:
+        markup.add(types.InlineKeyboardButton(f"📁 {s}", callback_data=f"up_srv_{s}"))
+    markup.add(types.InlineKeyboardButton("🔙 Return to Home", callback_data="adm_back"))
+    return markup
+
 def admin_ranges_keyboard():
     markup = types.InlineKeyboardMarkup(row_width=1)
     services = db.services.distinct("service_name")
@@ -494,6 +524,8 @@ def admin_ranges_keyboard():
         icon = "📸" if "instagram" in srv_name.lower() else "📘" if "facebook" in srv_name.lower() else "💬"
         markup.add(types.InlineKeyboardButton(f"{icon} Configure {srv_name} Arrays", callback_data=f"setrng_{srv_name}", style="danger"))
     markup.add(types.InlineKeyboardButton("➕ Add New Routing Service", callback_data="adm_add_service", style="danger"))
+    markup.add(types.InlineKeyboardButton("🔄 Auto Range Scan (Zenex)", callback_data="adm_scan_zenex", style="primary"))
+    markup.add(types.InlineKeyboardButton("🔄 Auto Range Scan (Stexsms)", callback_data="adm_scan_stex", style="primary"))
     markup.add(types.InlineKeyboardButton("🔙 Return to Home", callback_data="adm_back", style="primary"))
     markup.add(types.InlineKeyboardButton("❌ Close", callback_data="cancel_step", style="danger"))
     return markup
@@ -555,11 +587,7 @@ def perms_keyboard(target_uid):
         state = "✅" if key in perms else "❌"
         markup.add(types.InlineKeyboardButton(f"{state} {label}", callback_data=f"tglperm_{target_uid}_{key}", style="primary"))
         
-    if "fullaccess" in perms:
-        markup.add(types.InlineKeyboardButton("⏬ Make Secondary (Revoke Access)", callback_data=f"tglperm_{target_uid}_fullaccess", style="danger"))
-    else:
-        markup.add(types.InlineKeyboardButton("🌟 Make Primary (Full Access)", callback_data=f"tglperm_{target_uid}_fullaccess", style="success"))
-        
+    markup.add(types.InlineKeyboardButton("🌟 Grant Full Access", callback_data=f"tglperm_{target_uid}_fullaccess", style="primary"))
     markup.add(types.InlineKeyboardButton("🔙 Back to Team", callback_data="adm_manage_admins", style="danger"))
     return markup
 
@@ -572,6 +600,42 @@ def handle_cancel_step(call):
     try: bot.delete_message(call.message.chat.id, call.message.message_id)
     except: pass
 
+
+@bot.message_handler(commands=['stats', 'view_stats'])
+def cmd_view_stats(message):
+    user_id = message.from_user.id
+    if not has_permission(user_id, "stats"): return bot.reply_to(message, "❌ Access Denied")
+    chat_id = message.chat.id
+    today_date = time.strftime('%Y-%m-%d')
+    today_otps = db.otps_history.count_documents({"date": today_date})
+    total_otps = db.otps_history.count_documents({})
+    
+    one_min_ago = time.time() - 60
+    active_users = db.users.count_documents({"last_active": {"$gte": one_min_ago}})
+    
+    pipeline = [{"$group": {"_id": "$panel", "count": {"$sum": 1}}}]
+    panel_counts = list(db.otps_history.aggregate(pipeline))
+    panel_breakdown = "━━━━━━━━━━━━━━━━━━━\n📊 *Panel Breakdown:*\n"
+    if not panel_counts:
+        panel_breakdown += "- No OTPs yet\n"
+    for p in panel_counts:
+        p_name = p['_id'] if p.get('_id') else "Legacy"
+        p_name = p_name.replace('_', '\\_').replace('*', '\\*').replace('`', '\\`')
+        panel_breakdown += f"- {p_name}: `{p['count']}`\n"
+        
+    msg = (
+        "📊 *System Statistics:*\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        f"🟢 *Active Users (1m):* `{active_users}` Nodes\n"
+        f"📅 *Today's Total OTPs:* `{today_otps}`\n"
+        f"📈 *All-Time Total OTPs:* `{total_otps}`\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        f"{panel_breakdown}"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "📅 *Select a date below to view specific statistics:*"
+    )
+    bot.send_message(chat_id, msg, reply_markup=stats_date_keyboard(), parse_mode="Markdown")
+
 @bot.message_handler(commands=['admin'])
 @bot.message_handler(func=lambda msg: msg.text == "👑 Admin Console")
 def admin_panel(message):
@@ -581,51 +645,6 @@ def admin_panel(message):
     pnames = ", ".join([p["panel_name"] for p in active_panels]) if active_panels else "Zenex (Legacy)"
     msg = f"👑 *Main Control Console V8.0*\n\n_Manage networks, configurations, and user operations seamlessly._\n\n👥 *Total Users:* `{total_users}`\n⚡ *Active Panels:* `{pnames}`"
     bot.send_message(message.chat.id, msg, reply_markup=admin_panel_keyboard(message.from_user.id))
-def show_otp_stats(chat_id, message_id=None, target_date=None):
-    import datetime
-    if not target_date or target_date == "today":
-        target_date = datetime.datetime.now().strftime('%Y-%m-%d')
-    
-    pipeline = [
-        {"$match": {"date": target_date}},
-        {"$group": {"_id": "$panel", "count": {"$sum": 1}}}
-    ]
-    results = list(db.otps_history.aggregate(pipeline))
-    
-    total = sum([r['count'] for r in results])
-    
-    msg_text = f"📊 *OTP Stats for {target_date}*\n\n"
-    if not results:
-        msg_text += "No OTPs found for this date.\n"
-    else:
-        for r in results:
-            pname = r['_id'] or "Unknown"
-            msg_text += f"🔹 {pname}: {r['count']} OTPs\n"
-    msg_text += f"\n*Total:* {total} OTPs"
-    
-    curr_dt = datetime.datetime.strptime(target_date, '%Y-%m-%d')
-    prev_dt = (curr_dt - datetime.timedelta(days=1)).strftime('%Y-%m-%d')
-    next_dt = (curr_dt + datetime.timedelta(days=1)).strftime('%Y-%m-%d')
-    today = datetime.datetime.now().strftime('%Y-%m-%d')
-    
-    markup = types.InlineKeyboardMarkup(row_width=3)
-    markup.add(
-        types.InlineKeyboardButton("⬅️ Prev", callback_data=f"adm_otp_stats_{prev_dt}"),
-        types.InlineKeyboardButton("🔄 Today", callback_data=f"adm_otp_stats_today"),
-        types.InlineKeyboardButton("Next ➡️", callback_data=f"adm_otp_stats_{next_dt}")
-    )
-    markup.add(types.InlineKeyboardButton("❌ Close", callback_data="cancel_step"))
-    
-    if message_id:
-        try: bot.edit_message_text(msg_text, chat_id=chat_id, message_id=message_id, reply_markup=markup, parse_mode="Markdown")
-        except: pass
-    else:
-        bot.send_message(chat_id, msg_text, reply_markup=markup, parse_mode="Markdown")
-
-@bot.message_handler(commands=['otp_stats'])
-def cmd_otp_stats(message):
-    if not is_admin(message.from_user.id): return
-    show_otp_stats(message.chat.id)
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("2fa_"))
@@ -634,7 +653,7 @@ def callback_2fa_handler(call):
     chat_id = call.message.chat.id
     
     if action == "2fa_new":
-        msg = bot.send_message(chat_id, "?? *2FA Code Generator*\n\nPlease send me your 2FA Key (Base32 format):", parse_mode="Markdown", reply_markup=reply_cancel_markup())
+        msg = bot.send_message(chat_id, "🔐 *2FA Code Generator*\n\nPlease send me your 2FA Key (Base32 format):", parse_mode="Markdown", reply_markup=reply_cancel_markup())
         bot.register_next_step_handler(msg, process_2fa_key)
         try: bot.answer_callback_query(call.id)
         except: pass
@@ -648,10 +667,10 @@ def callback_2fa_handler(call):
             code = totp.now()
             remaining = 30 - (int(time.time()) % 30)
             
-            reply_text = f"?? *2FA Code Generator*\n\n?? *Key:* {key}\n\n?? *Code:* {code}\n? *Expires in:* {remaining}s"
+            reply_text = f"🔐 *2FA Code Generator*\n\n🔑 *Key:* `{key}`\n\n🔢 *Code:* `{code}`\n⏳ *Expires in:* `{remaining}s`"
             markup = types.InlineKeyboardMarkup(row_width=2)
-            btn_refresh = types.InlineKeyboardButton("?? Refresh Code", callback_data=f"2fa_refresh:{key}", style="success")
-            btn_new = types.InlineKeyboardButton("? New", callback_data="2fa_new", style="primary")
+            btn_refresh = types.InlineKeyboardButton("🔄 Refresh Code", callback_data=f"2fa_refresh:{key}", style="success")
+            btn_new = types.InlineKeyboardButton("➕ New", callback_data="2fa_new", style="primary")
             markup.add(btn_refresh, btn_new)
             
             if call.message.text and code in call.message.text and f"{remaining}s" in call.message.text:
@@ -678,62 +697,30 @@ def handle_admin_callbacks(call):
     
     if action == "adm_scan_ranges":
         bot.send_message(chat_id, "🔍 Scanning Stexsms Console for active Facebook and Instagram ranges...")
-        stex_panel = db.panels.find_one({"base_url": {"$regex": "@public"}}) or db.panels.find_one({"panel_name": {"$regex": "Stexsms", "$options": "i"}})
+        stex_panel = db.panels.find_one({"base_url": {"$regex": "@public"}})
         if not stex_panel:
             bot.send_message(chat_id, "❌ No Stexsms panel found in config.")
             return
         
-        base = stex_panel['base_url'].rstrip('/')
-        if "@public/api" in base:
-            # Some panels use /@public/api, some use standard
-            base_v1 = base.replace("@public/api", "api") 
-        else:
-            base_v1 = base
-            
+        base = stex_panel['base_url']
         api_key = stex_panel['api_key']
-        headers = {'mauthapi': api_key, 'mapikey': api_key}
+        headers = {'mauthapi': api_key}
         try:
-            # Try Zenex-style active-ranges first
-            res = http_session.get(base_v1 + '/v1/active-ranges', headers=headers, timeout=10).json()
-            if not res or "data" not in res or not res.get("data", {}).get("active_ranges"):
-                # Fallback to liveaccess
-                res = http_session.get(base + '/liveaccess', headers=headers, timeout=10).json()
-                
-            active_ranges = res.get("data", {}).get("active_ranges") or res.get("data", {}).get("services", [])
-            
-            # If both fail, try console (old method)
-            if not active_ranges:
-                res = http_session.get(base + '/console', headers=headers, timeout=10).json()
-                otps = res.get("data", {}).get("otps", [])
-                active_ranges = []
-                for otp in otps:
-                    active_ranges.append({
-                        "service": "Facebook" if "facebook" in str(otp.get("sid", "")).lower() else "Instagram" if "instagram" in str(otp.get("sid", "")).lower() else "",
-                        "range": otp.get("range", ""),
-                        "hits": 1 # Fake hit for console fallback
-                    })
-
+            res = http_session.get(base + '/console', headers=headers, timeout=10).json()
+            otps = res.get("data", {}).get("otps", [])
             added_count = 0
-            for route in active_ranges:
-                service_name = str(route.get("service", ""))
-                if not service_name:
-                    sid = str(route.get("sid", "")).lower()
-                    if "facebook" in sid: service_name = "Facebook"
-                    elif "instagram" in sid: service_name = "Instagram"
+            for otp in otps:
+                sid = str(otp.get("sid", "")).lower()
+                if "facebook" in sid: service_name = "Facebook"
+                elif "instagram" in sid: service_name = "Instagram"
+                else: continue
                     
-                target_range = str(route.get("range", ""))
-                hits = route.get("hits", route.get("success", route.get("count", 0)))
+                target_range = str(otp.get("range", ""))
+                if not target_range: continue
                 
-                if not service_name or not target_range: continue
-                
-                c_name = f"🔥 hits {hits}" if hits else f"Auto: {target_range}"
-                
-                # Update if exists, otherwise insert
-                result = db.services.update_one(
-                    {"service_name": service_name, "range": target_range},
-                    {"$set": {"country_name": c_name, "panel_name": stex_panel['panel_name']}}
-                )
-                if result.matched_count == 0:
+                c_name = f"Auto: {target_range}"
+                exists = db.services.find_one({"service_name": service_name, "range": target_range})
+                if not exists:
                     db.services.insert_one({
                         "service_name": service_name,
                         "country_name": c_name,
@@ -741,296 +728,18 @@ def handle_admin_callbacks(call):
                         "panel_name": stex_panel['panel_name']
                     })
                     added_count += 1
-                    
-            bot.send_message(chat_id, f"✅ Stexsms Scan Complete! Updated hits & added {added_count} new ranges.")
+            bot.send_message(chat_id, f"✅ Scan Complete! Added {added_count} new ranges for Facebook/Instagram.")
         except Exception as e:
             bot.send_message(chat_id, f"❌ Scan failed: {e}")
-    elif action == "adm_scan_zenex":
-        bot.send_message(chat_id, "🔍 Scanning Zenex Live Routes for active ranges...")
-        zenex_panel = db.panels.find_one({"panel_name": "Zenex"})
-        if not zenex_panel:
-            bot.send_message(chat_id, "❌ No Zenex panel found in config.")
-            return
-            
-        base = zenex_panel['base_url'].rstrip('/')
-        api_key = zenex_panel['api_key']
-        headers = {'mapikey': api_key}
-        try:
-            res = http_session.get(base + '/v1/active-ranges', headers=headers, timeout=10).json()
-            active_ranges = res.get("data", {}).get("active_ranges", [])
-            added_count = 0
-            for route in active_ranges:
-                service_name = str(route.get("service", ""))
-                target_range = str(route.get("range", ""))
-                hits = route.get("hits", 0)
-                if not service_name or not target_range: continue
-                
-                # Show the hits count right in the button name!
-                c_name = f"🔥 hits {hits}"
-                
-                # Update if exists, otherwise insert
-                result = db.services.update_one(
-                    {"service_name": service_name, "range": target_range},
-                    {"$set": {
-                        "country_name": c_name,
-                        "panel_name": zenex_panel['panel_name']
-                    }},
-                    upsert=True
-                )
-                if result.upserted_id:
-                    added_count += 1
-            bot.send_message(chat_id, f"✅ Zenex Scan Complete! Automatically updated hit counts & added {added_count} new high-hit routes.")
-        except Exception as e:
-            bot.send_message(chat_id, f"❌ Zenex Scan failed: {e}")
 
-    elif action == "adm_close":
-        bot.delete_message(chat_id, call.message.message_id)
-        
-    elif action == "adm_bulk_order":
-        bot.edit_message_text("⚡ *Select Target Protocol for Bulk Order:*", chat_id, call.message.message_id, reply_markup=bulk_service_menu_keyboard())
-
-    elif action == "adm_back":
-        total_users = db.users.count_documents({})
-        active_panels = list(db.panels.find({"is_active": True}))
-        pnames = ", ".join([p["panel_name"] for p in active_panels]) if active_panels else "Zenex (Legacy)"
-        msg = f"👑 *Main Control Console V8.0*\n\n_Manage networks, configurations, and user operations seamlessly._\n\n👥 *Total Users:* `{total_users}`\n⚡ *Active Panels:* `{pnames}`"
-        bot.edit_message_text(msg, chat_id, call.message.message_id, reply_markup=admin_panel_keyboard(user_id))
-        
-    elif action == "adm_add_panel":
-        if not is_primary_admin(user_id): return bot.answer_callback_query(call.id, "❌ Access Denied", show_alert=True)
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton("🔥 Stexsms", callback_data="add_pnl_stexsms"),
-            types.InlineKeyboardButton("🔥 Zenex", callback_data="add_pnl_zenex")
-        )
-        markup.add(types.InlineKeyboardButton("⚙️ Custom Panel", callback_data="add_pnl_custom"))
-        markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="adm_panels_menu"))
-        bot.edit_message_text("⚙️ *Select Panel Type to Setup:*", chat_id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
-
-    elif action.startswith("add_pnl_"):
-        if not is_primary_admin(user_id): return bot.answer_callback_query(call.id, "❌ Access Denied", show_alert=True)
-        p_type = action.split("add_pnl_")[1]
-        
-        if p_type == "custom":
-            msg = bot.send_message(chat_id, "⚙️ *Enter Custom Panel Details:*\n\nFormat:\n`PanelName|BaseURL|APIKey`\n\n_(Example: `SMSHadi|http://smshadi.net|XYZ123`)_", reply_markup=cancel_markup(), parse_mode="Markdown")
-            bot.register_next_step_handler(msg, process_add_panel)
-        else:
-            name = p_type.capitalize()
-            msg = bot.send_message(chat_id, f"🔑 *Enter API Key for {name}:*\n\nJust send the API Key, no link needed!", reply_markup=cancel_markup(), parse_mode="Markdown")
-            bot.register_next_step_handler(msg, process_quick_setup, p_type)
-
-    elif action == "adm_upload_txt":
-        if not is_primary_admin(user_id): return bot.answer_callback_query(call.id, "🔴 Access Denied", show_alert=True)
-        services = list(db.services.find())
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        for srv in services:
-            markup.add(types.InlineKeyboardButton(f"{srv['service_name']} ({srv['country_name']})", callback_data=f"up_srv_{str(srv['_id'])}", style="primary"))
-        markup.add(types.InlineKeyboardButton("❌ Cancel", callback_data="adm_close", style="danger"))
-        bot.send_message(chat_id, "📁 *Select Service to Upload Numbers:*", reply_markup=markup, parse_mode="Markdown")
-        
-    elif action.startswith("up_srv_"):
-        if not is_primary_admin(user_id): return bot.answer_callback_query(call.id, "🔴 Access Denied", show_alert=True)
-        srv_id = action.split("up_srv_")[1]
-        from bson.objectid import ObjectId
-        srv = db.services.find_one({"_id": ObjectId(srv_id)})
-        msg = bot.send_message(chat_id, f"📎 *Please upload the .txt file for {srv['service_name']} ({srv['country_name']})*\n\n_Note: 1 number per line._", reply_markup=cancel_markup(), parse_mode="Markdown")
-        bot.register_next_step_handler(msg, process_txt_upload, srv_id)
-
-    elif action == "adm_panels_menu":
-        if not is_primary_admin(user_id): return bot.answer_callback_query(call.id, "🔴 Access Denied", show_alert=True)
-        bot.edit_message_text("🎛 *PANEL MANAGEMENT SYSTEM*\n\n_Select a panel to activate it, or add/delete panels:_", chat_id, call.message.message_id, reply_markup=panels_menu_keyboard())
-
-    elif action == "adm_add_panel":
-        if not is_primary_admin(user_id): return bot.answer_callback_query(call.id, "🔴 Access Denied", show_alert=True)
-        msg = bot.send_message(chat_id, "📝 *Enter New Panel Details:*\n\nFormat:\n`PanelName|BaseURL|APIKey`\n\n_(Example: `SMSHadi|http://smshadi.net|XYZ123`)_", reply_markup=cancel_markup())
-        bot.register_next_step_handler(msg, process_add_panel)
-
-    elif action == "adm_del_panel":
-        if not is_primary_admin(user_id): return bot.answer_callback_query(call.id, "🔴 Access Denied", show_alert=True)
-        bot.edit_message_text("🗑 *DELETE PANEL*\n\n_Select a panel to delete (Active panel cannot be deleted):_", chat_id, call.message.message_id, reply_markup=panels_del_keyboard())
-
-    elif action.startswith("pnl_toggle_"):
-        if not is_primary_admin(user_id): return bot.answer_callback_query(call.id, "🔴 Access Denied", show_alert=True)
-        from bson.objectid import ObjectId
-        p_id = action.split("pnl_toggle_")[1]
-        panel = db.panels.find_one({"_id": ObjectId(p_id)})
-        new_status = not panel.get("is_active", False)
-        
-        if new_status:
-            db.panels.update_many({"_id": {"$ne": ObjectId(p_id)}}, {"$set": {"is_active": False}})
-            db.panels.update_one({"_id": ObjectId(p_id)}, {"$set": {"is_active": True}})
-            db.services.delete_many({}) 
-            
-            panel_name = panel.get("panel_name", "")
-            base = panel.get("base_url", "").rstrip('/')
-            api_key = panel.get("api_key", "")
-            bot.answer_callback_query(call.id, f"Scanning {panel_name} routes in real-time...", show_alert=False)
-            
-            count = 0
-            try:
-                if panel_name.lower() == "zenex":
-                    try:
-                        res = http_session.get(base + '/v1/active-ranges', headers={'mapikey': api_key}, timeout=10).json()
-                        routes = res.get("data", {}).get("active_ranges", [])
-                    except: routes = []
-                elif panel_name.lower() == "stexsms":
-                    base_v1 = base.replace("@public/api", "api") if "@public/api" in base else base
-                    headers = {'mauthapi': api_key}
-                    try: res = http_session.get(base_v1 + '/v1/active-ranges', headers=headers, timeout=10).json()
-                    except: res = None
-                    if not res or "data" not in res or not res.get("data", {}).get("active_ranges"):
-                        try: res = http_session.get(base + '/liveaccess', headers=headers, timeout=10).json()
-                        except: res = None
-                    
-                    routes = res.get("data", {}).get("active_ranges") if res else []
-                        
-                    if not routes:
-                        try: 
-                            res = http_session.get(base + '/console', headers=headers, timeout=10).json()
-                            otps = res.get("data", {}).get("hits") or res.get("data", {}).get("otps", [])
-                        except: otps = []
-                        routes = []
-                        range_counts = {}
-                        service_map = {}
-                        current_time_ms = time.time() * 1000
-                        for otp in otps:
-                            if current_time_ms - int(otp.get("time", 0)) > 300000: continue
-                            sid = str(otp.get("sid", "")).lower()
-                            msg = str(otp.get("message", "")).lower()
-                            if "facebook" in sid:
-                                s_name = "Instagram" if "instagram" in msg else "Facebook"
-                            elif "instagram" in sid: s_name = "Instagram"
-                            else: continue
-                            tr = str(otp.get("range", ""))
-                            if not tr: continue
-                            range_counts[tr] = range_counts.get(tr, 0) + 1
-                            service_map[tr] = s_name
-                        for tr, hits in range_counts.items():
-                            routes.append({"service": service_map[tr], "range": tr, "hits": hits})
-                else:
-                    routes = []
-                
-                for route in routes:
-                    s_name = str(route.get("service", ""))
-                    t_range = str(route.get("range", ""))
-                    hits = int(route.get("hits", 0))
-                    if not s_name or not t_range: continue
-                    clean_range = t_range.replace("X", "0").replace("x", "0")
-                    try:
-                        from panel import get_country_info
-                        name, flag, _ = get_country_info("+" + clean_range + "0000000")
-                        short_name = name.split()[0][:8] if name else "Unknown"
-                        c_name = f"{flag} {short_name} | 🔥 hits {hits}"
-                    except:
-                        c_name = f"🔥 hits {hits}"
-                    db.services.update_one(
-                        {"service_name": s_name, "range": t_range},
-                        {"$set": {"country_name": c_name, "panel_name": panel_name, "hits": hits}},
-                        upsert=True
-                    )
-                    count += 1
-                bot.send_message(chat_id, f"✅ *Successfully connected to {panel_name} and loaded {count} real-time active services!*", parse_mode="Markdown")
-            except Exception as e:
-                bot.send_message(chat_id, f"❌ *Error scanning {panel_name}:* {e}", parse_mode="Markdown")
-        else:
-            db.panels.update_one({"_id": ObjectId(p_id)}, {"$set": {"is_active": False}})
-            db.services.delete_many({"panel_name": panel.get("panel_name")})
-            bot.answer_callback_query(call.id, f"❌ {panel.get('panel_name')} deactivated and routes cleared.", show_alert=True)
-            
-        bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=panels_menu_keyboard())
-
-    elif action.startswith("pnl_del_"):
-        if not is_primary_admin(user_id): return bot.answer_callback_query(call.id, "🔴 Access Denied", show_alert=True)
-        from bson.objectid import ObjectId
-        p_id = action.split("pnl_del_")[1]
-        panel_to_del = db.panels.find_one({"_id": ObjectId(p_id)})
-        if panel_to_del and panel_to_del.get("is_active"):
-            bot.answer_callback_query(call.id, "🔴 Cannot delete an active panel!", show_alert=True)
-        else:
-            db.panels.delete_one({"_id": ObjectId(p_id)})
-            bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=panels_del_keyboard())
-
-    elif action.startswith("adm_otp_stats_"):
-        target_date = action.replace("adm_otp_stats_", "")
-        show_otp_stats(chat_id, call.message.message_id, target_date)
-
-    elif action == "adm_stats":
-        today_date = time.strftime('%Y-%m-%d')
-        today_otps = db.otps_history.count_documents({"date": today_date})
-        total_otps = db.otps_history.count_documents({})
-        
-        one_min_ago = time.time() - 60
-        active_users = db.users.count_documents({"last_active": {"$gte": one_min_ago}})
-        
-        pipeline = [{"$group": {"_id": "$panel", "count": {"$sum": 1}}}]
-        panel_counts = list(db.otps_history.aggregate(pipeline))
-        panel_breakdown = "📦 *Panel Breakdown:*\n"
-        if not panel_counts:
-            panel_breakdown += "- No OTPs yet\n"
-        for p in panel_counts:
-            p_name = p['_id'] if p.get('_id') else "Legacy"
-            panel_breakdown += f"- {p_name}: `{p['count']}`\n"
-            
-        msg = (
-            "📊 *System Statistics:*\n"
-            "━━━━━━━━━━━━━━━━━━━\n"
-            f"🟢 *Active Users (1m):* `{active_users}` Nodes\n"
-            f"📅 *Today's Total OTPs:* `{today_otps}`\n"
-            f"📈 *All-Time Total OTPs:* `{total_otps}`\n"
-            "━━━━━━━━━━━━━━━━━━━\n"
-            f"{panel_breakdown}"
-            "━━━━━━━━━━━━━━━━━━━\n"
-            "To check a custom date, send the date in `YYYY-MM-DD` format below:\n"
-            ""
-        )
-        msg_obj = bot.send_message(chat_id, msg)
-        bot.register_next_step_handler(msg_obj, process_custom_date_stats)
-        
-    elif action == "adm_toggle_notif":
-        if not is_primary_admin(user_id): return bot.answer_callback_query(call.id, "🔴 Access Denied", show_alert=True)
-        current = get_config("admin_notifications", "1")
-        new_val = "0" if current == "1" else "1"
-        set_config("admin_notifications", new_val)
-        bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=admin_panel_keyboard(user_id))
-        
-    elif action == "adm_stockouts":
-        recent_logs = list(db.stock_outs.find().sort("timestamp", -1).limit(10))
-        if not recent_logs:
-            bot.answer_callback_query(call.id, "✅ No stock outs logged yet.", show_alert=True)
-            return
-            
-        log_msg = "⚠️ *RECENT STOCK OUT LOGS (Last 10)*\n━━━━━━━━━━━━━━━━━━━\n"
-        for log in recent_logs:
-            dt = time.strftime('%H:%M:%S', time.localtime(log['timestamp']))
-            log_msg += f"🕒 `{dt}` | ID: `{log['user_id']}`\n🌍 {log['country']} | ⚡ {log['service']}\n\n"
-        log_msg += "━━━━━━━━━━━━━━━━━━━"
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="adm_back", style="danger"))
-        bot.edit_message_text(log_msg, chat_id, call.message.message_id, reply_markup=markup)
-        
-    elif action == "adm_ranges_menu":
-        if not has_permission(user_id, "ranges"): return bot.answer_callback_query(call.id, "🔴 Access Denied", show_alert=True)
-        status_text = "⚙️ *SYSTEM ROUTING POOL:*\n\n"
-        rows = db.services.find().sort("service_name", 1)
-            
-        current_srv = ""
-        for r in rows:
-            if r['service_name'] != current_srv:
-                current_srv = r['service_name']
-                status_text += f"▪️ *{current_srv}:*\n"
-            status_text += f"   ➔ {r['country_name']}: `{r['range']}` ({r.get('panel_name', 'Zenex')})\n"
-            
-        status_text += "\nSelect target service to update/add country range:"
-        bot.edit_message_text(status_text, chat_id, call.message.message_id, reply_markup=admin_ranges_keyboard())
-        
     elif action == "adm_remove_ranges_menu":
         if not has_permission(user_id, "ranges"): return bot.answer_callback_query(call.id, "🔴 Access Denied", show_alert=True)
-        status_text = "❌ *REMOVE COUNTRY MANAGEMENT:*\n\nSelect target service node:"
+        status_text = "🗑️ *REMOVE COUNTRY MANAGEMENT:*\n\nSelect target service node:"
         bot.edit_message_text(status_text, chat_id, call.message.message_id, reply_markup=admin_remove_ranges_keyboard())
         
     elif action == "adm_add_service":
         if not has_permission(user_id, "ranges"): return bot.answer_callback_query(call.id, "🔴 Access Denied", show_alert=True)
-        msg = bot.send_message(chat_id, "📝 *Enter New Service Name (e.g., Twitter):*")
+        msg = bot.send_message(chat_id, "➕ *Enter New Service Name (e.g., Twitter):*")
         bot.register_next_step_handler(msg, process_add_service)
         
     elif action.startswith("setrng_"):
@@ -1038,6 +747,89 @@ def handle_admin_callbacks(call):
         service = action.split("_")[1]
         msg = bot.send_message(chat_id, f"⚙️ *Type the API Panel Name for {service} (e.g., Zenex or Stexsms):*")
         bot.register_next_step_handler(msg, process_add_service_panel, service)
+        
+    elif action == "adm_scan_zenex":
+        if not has_permission(user_id, "ranges"): return bot.answer_callback_query(call.id, "🔴 Access Denied", show_alert=True)
+        bot.answer_callback_query(call.id, "⏳ Scanning Zenex API...")
+        try:
+            zenex_panel = db.panels.find_one({"panel_name": "Zenex"})
+            if not zenex_panel:
+                bot.send_message(chat_id, "❌ Zenex panel not found in DB.")
+                return
+            base = zenex_panel['base_url'].rstrip('/')
+            res = http_session.get(base + '/v1/active-ranges', headers={'mapikey': zenex_panel['api_key']}, timeout=10).json()
+            active_ranges = res.get("data", {}).get("active_ranges", [])
+            for route in active_ranges:
+                service_name = str(route.get("service", ""))
+                target_range = str(route.get("range", ""))
+                hits = int(route.get("hits", 0))
+                if not service_name or not target_range: continue
+                clean_range = target_range.replace("X", "0").replace("x", "0")
+                try:
+                    from panel import get_country_info
+                    name, flag, _ = get_country_info("+" + clean_range + "0000000")
+                    short_name = name.split()[0][:8] if name else "Unknown"
+                    c_name = f"{flag} {short_name} | 🔥 hits {hits}"
+                except:
+                    c_name = f"🔥 hits {hits}"
+                db.services.update_one(
+                    {"service_name": service_name, "range": target_range, "panel_name": "Zenex"},
+                        {"$set": {"country_name": c_name, "panel_name": "Zenex", "hits": hits}},
+                    upsert=True
+                )
+            bot.send_message(chat_id, f"✅ *Zenex Routes Synchronized!*\nFetched {len(active_ranges)} active ranges from Zenex successfully.")
+        except Exception as e:
+            bot.send_message(chat_id, f"❌ Zenex Scan failed: {e}")
+
+    elif action == "adm_scan_stex":
+        if not has_permission(user_id, "ranges"): return bot.answer_callback_query(call.id, "🔴 Access Denied", show_alert=True)
+        bot.answer_callback_query(call.id, "⏳ Scanning Stexsms Console for active routes...")
+        try:
+            stex_panel = db.panels.find_one({"panel_name": {"$regex": "stex", "$options": "i"}})
+            if not stex_panel:
+                bot.send_message(chat_id, "❌ Stexsms panel not found in DB.")
+                return
+            
+            base = stex_panel['base_url'].rstrip('/')
+            headers = {'mauthapi': stex_panel['api_key']}
+            res = http_session.get(base + '/console', headers=headers, timeout=10).json()
+            otps = res.get("data", {}).get("otps", [])
+            
+            stex_hits = {}
+            for otp in otps:
+                sid = str(otp.get("sid", "")).lower()
+                if "facebook" in sid: service_name = "Facebook"
+                elif "instagram" in sid: service_name = "Instagram"
+                else: continue
+                target_range = str(otp.get("range", ""))
+                if not target_range: continue
+                key = (service_name, target_range)
+                stex_hits[key] = stex_hits.get(key, 0) + 1
+                
+            import time
+            if stex_hits:
+                for (service_name, target_range), hits in stex_hits.items():
+                    clean_range = target_range.replace("X", "0").replace("x", "0")
+                    boosted_hits = 20 + hits # Ensure it is shown as BOOM
+                    try:
+                        from panel import get_country_info
+                        name, flag, _ = get_country_info("+" + clean_range + "0000000")
+                        short_name = name.split()[0][:8] if name else "Unknown"
+                        c_name = f"{flag} {short_name} | 🔥 hits {boosted_hits}"
+                    except:
+                        c_name = f"🔥 hits {boosted_hits}"
+                        
+                    db.services.update_one(
+                        {"service_name": service_name, "range": target_range, "panel_name": stex_panel["panel_name"]},
+                        {"$set": {"country_name": c_name, "panel_name": stex_panel["panel_name"], "hits": boosted_hits, "last_updated": time.time()}},
+                        upsert=True
+                    )
+                db.services.delete_many({"panel_name": stex_panel["panel_name"], "last_updated": {"$lt": time.time() - 300}})
+                bot.send_message(chat_id, f"✅ *Stexsms Scan Complete!*\nFound {len(stex_hits)} active recent ranges from Console.")
+            else:
+                bot.send_message(chat_id, f"❌ Stexsms Console returned no recent OTPs.")
+        except Exception as e:
+            bot.send_message(chat_id, f"❌ Stexsms Sync failed: {e}")
 
     elif action.startswith("remrng_"):
         if not has_permission(user_id, "ranges"): return bot.answer_callback_query(call.id, "🔴 Access Denied", show_alert=True)
@@ -1047,7 +839,7 @@ def handle_admin_callbacks(call):
 
     elif action == "adm_broadcast":
         if not has_permission(user_id, "broadcast"): return bot.answer_callback_query(call.id, "🔴 Access Denied", show_alert=True)
-        msg = bot.send_message(chat_id, "📢 *Enter Broadcast Transmission Message:*", reply_markup=cancel_markup())
+        msg = bot.send_message(chat_id, "📢 *Enter Broadcast Transmission Message:*, reply_markup=cancel_markup())")
         bot.register_next_step_handler(msg, process_broadcast)
         
     elif action == "adm_userinfo":
@@ -1082,10 +874,10 @@ def handle_admin_callbacks(call):
         msg = bot.send_message(chat_id, f"⚙️ *Which panel's API do you want to update?*\nAvailable: `{pnl_str}`\n\n_Type the panel name:_")
         bot.register_next_step_handler(msg, process_select_api_panel)
         
-    elif action == "adm_main_channel":
+    elif action == "adm_support_link":
         if not is_primary_admin(user_id): return bot.answer_callback_query(call.id, "🔴 Access Denied", show_alert=True)
-        msg = bot.send_message(chat_id, "📢 *Enter New Main Channel URL (for users to click):*")
-        bot.register_next_step_handler(msg, process_change_main_channel)
+        msg = bot.send_message(chat_id, "📞 *Enter New Support Link (URL for users to click):*")
+        bot.register_next_step_handler(msg, process_change_support_link)
         
     elif action == "adm_otp_link":
         if not is_primary_admin(user_id): return bot.answer_callback_query(call.id, "🔴 Access Denied", show_alert=True)
@@ -1110,13 +902,10 @@ def handle_admin_callbacks(call):
         admin_list_text = "👮‍♂️ *Current Admin Team:*\n━━━━━━━━━━━━━━━━━━━\n"
         for idx, row in enumerate(admin_rows):
             uid = row['user_id']
-            user = db.users.find_one({"user_id": uid}) or db.users.find_one({"user_id": str(uid)}) or db.users.find_one({"user_id": int(uid) if uid.isdigit() else uid})
-            username_display = f"@{user['username']}" if user and user.get('username') else f"`{uid}`"
-            
-            if is_primary_admin(uid):
-                admin_list_text += f"▪️ {username_display} 👑 (Primary)\n"
+            if str(uid) == str(PRIMARY_ADMIN_ID):
+                admin_list_text += f"▪️ `{uid}` 👑 (Primary)\n"
             else:
-                admin_list_text += f"▪️ {username_display} 🛡️ (Secondary)\n"
+                admin_list_text += f"▪️ `{uid}` 🛡️ (Secondary)\n"
         admin_list_text += "━━━━━━━━━━━━━━━━━━━\n_Use the buttons below to manage your team._"
                 
         markup = types.InlineKeyboardMarkup(row_width=2)
@@ -1142,56 +931,6 @@ def handle_admin_callbacks(call):
         if not is_primary_admin(user_id): return bot.answer_callback_query(call.id, "🔴 Access Denied", show_alert=True)
         msg = bot.send_message(chat_id, "⚙️ *Enter Target Admin User ID to edit permissions:*")
         bot.register_next_step_handler(msg, process_ask_perm_uid)
-
-    elif action == "adm_resign":
-        if is_primary_admin(user_id):
-            primary_count = sum(1 for adm in db.admins.find() if '"fullaccess"' in adm.get('permissions', ''))
-            if primary_count <= 1:
-                secondaries = [adm for adm in db.admins.find() if '"fullaccess"' not in adm.get('permissions', '')]
-                if not secondaries:
-                    bot.answer_callback_query(call.id, "🔴 You are the only admin left. Please add another admin first.", show_alert=True)
-                    return
-                
-                markup = types.InlineKeyboardMarkup(row_width=1)
-                for sec in secondaries:
-                    sec_uid = sec['user_id']
-                    user = db.users.find_one({"user_id": sec_uid}) or db.users.find_one({"user_id": str(sec_uid)}) or db.users.find_one({"user_id": int(sec_uid) if sec_uid.isdigit() else sec_uid})
-                    uname = f"@{user['username']}" if user and user.get('username') else str(sec_uid)
-                    markup.add(types.InlineKeyboardButton(f"Promote {uname}", callback_data=f"adm_pass_prim_{sec_uid}", style="primary"))
-                markup.add(types.InlineKeyboardButton("❌ Cancel", callback_data="cancel_step", style="danger"))
-                bot.edit_message_text("⚠️ *আপনাকে লিভ নেওয়ার আগে অন্য কাউকে প্রাইমারি অ্যাডমিন বানাতে হবে।*\nনিচের লিস্ট থেকে একজনকে সিলেক্ট করুন:", chat_id, call.message.message_id, reply_markup=markup)
-                return
-                
-        db.admins.delete_one({"user_id": str(user_id)})
-        bot.answer_callback_query(call.id, "✅ You have successfully resigned as admin.", show_alert=True)
-        try: bot.delete_message(chat_id, call.message.message_id)
-        except: pass
-        bot.send_message(chat_id, "✅ You are no longer an admin.")
-        
-        for adm in db.admins.find():
-            if '"fullaccess"' in adm.get('permissions', ''):
-                try: bot.send_message(int(adm['user_id']), f"ℹ️ Admin `{user_id}` has resigned.")
-                except: pass
-                
-    elif action.startswith("adm_pass_prim_"):
-        if not is_primary_admin(user_id): return
-        target_uid = action.split("_")[3]
-        
-        perms = ["fullaccess", "broadcast", "userinfo", "ban", "unban", "reward", "ranges", "withdraw"]
-        db.admins.update_one({"user_id": str(target_uid)}, {"$set": {"permissions": json.dumps(perms)}})
-        db.admins.delete_one({"user_id": str(user_id)})
-        
-        bot.answer_callback_query(call.id, "✅ You have resigned and transferred primary access.", show_alert=True)
-        try: bot.delete_message(chat_id, call.message.message_id)
-        except: pass
-        bot.send_message(chat_id, f"✅ You are no longer an admin. Primary transferred to `{target_uid}`.")
-        
-        try: bot.send_message(int(target_uid), "🎉 You have been promoted to Primary Admin!")
-        except: pass
-        for adm in db.admins.find():
-            if '"fullaccess"' in adm.get('permissions', ''):
-                try: bot.send_message(int(adm['user_id']), f"ℹ️ Admin `{user_id}` resigned and transferred Primary to `{target_uid}`.")
-                except: pass
         
     elif action.startswith("tglperm_"):
         if not is_primary_admin(user_id): return bot.answer_callback_query(call.id, "🔴 Access Denied", show_alert=True)
@@ -1211,9 +950,6 @@ def handle_admin_callbacks(call):
             
         if perm_key == "fullaccess":
             if "fullaccess" in perms:
-                if str(target_uid) == str(PRIMARY_ADMIN_ID):
-                    bot.answer_callback_query(call.id, "🔴 Cannot revoke primary access from founder.", show_alert=True)
-                    return
                 perms = []
             else:
                 perms = ["fullaccess", "broadcast", "userinfo", "ban", "unban", "reward", "ranges", "withdraw"]
@@ -1227,59 +963,18 @@ def handle_admin_callbacks(call):
             
         bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=perms_keyboard(target_uid))
 
-def process_quick_setup(message, p_type):
-    if message.text == "/cancel": return
-    key = message.text.strip()
-    
-    if "|" in key:
-        bot.send_message(message.chat.id, "❌ Just send the API key, do not use `|` format here!")
-        return
-        
-    if p_type == "stexsms":
-        url = "https://api.2oo9.cloud/MXS47FLFX0U/tness/@public/api"
-        name = "Stexsms"
-    elif p_type == "zenex":
-        url = "https://api.zenexnetwork.com"
-        name = "Zenex"
-    else: return
-    
-    try:
-        existing = db.panels.find_one({"panel_name": {"$regex": name, "$options": "i"}})
-        if existing:
-            db.panels.update_one({"_id": existing["_id"]}, {"$set": {"api_key": key, "base_url": url}})
-        else:
-            db.panels.insert_one({"panel_name": name, "base_url": url, "api_key": key, "is_active": False})
-            
-        bot.send_message(message.chat.id, f"✅ *{name} API Key Setup Successfully!*\n\nGo to Manage Panels to activate it if it is a new panel, or background scanner will use it automatically.", parse_mode="Markdown")
-    except Exception as e:
-        bot.send_message(message.chat.id, f"❌ Error: {e}")
-
 def process_add_panel(message):
     if message.text == "/cancel": return
     try:
         parts = message.text.split("|")
-        name = parts[0].strip()
-        
-        if len(parts) == 2 and name.lower() == "stexsms":
-            url = "https://api.2oo9.cloud/MXS47FLFX0U/tness/@public/api"
-            key = parts[1].strip()
-        elif len(parts) == 3:
-            url = parts[1].strip().rstrip("/")
-            key = parts[2].strip()
-            if name.lower() == "stexsms":
-                url = "https://api.2oo9.cloud/MXS47FLFX0U/tness/@public/api"
-        else:
-            bot.send_message(message.chat.id, "❌ Invalid format.\nUse: `PanelName|BaseURL|APIKey`\nFor Stexsms, you can just use: `Stexsms|Your_API_Key`", parse_mode="Markdown")
+        if len(parts) != 3:
+            bot.send_message(message.chat.id, "❌ Invalid format. Please use: Name|URL|Key")
             return
         
-        # Check if Stexsms already exists to avoid duplicates
-        if name.lower() == "stexsms":
-            existing = db.panels.find_one({"panel_name": {"$regex": "Stexsms", "$options": "i"}})
-            if existing:
-                db.panels.update_one({"_id": existing["_id"]}, {"$set": {"api_key": key, "base_url": url}})
-                bot.send_message(message.chat.id, f"✅ *Stexsms API Key Updated Successfully!*\n\nURL: `{url}`\n\nNo need to activate it manually, background scanner will use it.", parse_mode="Markdown")
-                return
-
+        name = parts[0].strip()
+        url = parts[1].strip().rstrip("/")
+        key = parts[2].strip()
+        
         db.panels.insert_one({
             "panel_name": name,
             "base_url": url,
@@ -1346,6 +1041,7 @@ def process_custom_date_stats(message):
     panel_breakdown = "\n📦 *Panel Breakdown:*\n"
     for p in panel_counts:
         p_name = p['_id'] if p.get('_id') else "Legacy"
+        p_name = p_name.replace('_', '\\_').replace('*', '\\*').replace('`', '\\`')
         panel_breakdown += f"- {p_name}: `{p['count']}`\n"
         
     bot.send_message(message.chat.id, f"📅 *Stats for {target_date}:*\nTotal OTPs received: `{count}`{panel_breakdown}")
@@ -1370,6 +1066,9 @@ def process_add_admin(message):
 def process_rem_admin(message):
     try:
         uid = str(int(message.text.strip()))
+        if uid == str(PRIMARY_ADMIN_ID):
+            bot.send_message(message.chat.id, "❌ Cannot remove Primary Admin.")
+            return
         db.admins.delete_one({"user_id": uid})
         bot.send_message(message.chat.id, f"✅ User `{uid}` removed from admins.")
     except:
@@ -1381,43 +1080,14 @@ def process_select_api_panel(message):
     if not panel:
         bot.send_message(message.chat.id, "❌ Invalid Panel Name.")
         return
-        
-    if panel['panel_name'].lower() == "stexsms":
-        msg = bot.send_message(message.chat.id, f"🔑 *Enter New API Key for {panel['panel_name']}:*\nJust send the API Key, no link needed!", reply_markup=cancel_markup(), parse_mode="Markdown")
-    else:
-        msg = bot.send_message(message.chat.id, f"🔑 *Enter New Base URL and API Key for {panel['panel_name']}:*\nFormat: `BaseURL|APIKey`\n_(Example: https://stexsms.com|XYZ123)_", reply_markup=cancel_markup(), parse_mode="Markdown")
-        
+    msg = bot.send_message(message.chat.id, f"🔑 *Enter New API Key for {panel['panel_name']}:*\n_(Example: XYZ123)_", reply_markup=cancel_markup())
     bot.register_next_step_handler(msg, process_change_api_v2, panel['panel_name'])
 
 def process_change_api_v2(message, panel_name):
     if message.text == "❌ Cancel": return
-    try:
-        input_text = message.text.strip()
-        if panel_name.lower() == "stexsms" and "|" not in input_text:
-            base_url = "https://api.2oo9.cloud/MXS47FLFX0U/tness/@public/api"
-            new_api = input_text
-        elif panel_name.lower() == "zenex" and "|" not in input_text:
-            base_url = "https://api.zenexnetwork.com"
-            new_api = input_text
-        else:
-            parts = input_text.split("|")
-            base_url = parts[0].strip()
-            new_api = parts[1].strip()
-            
-        db.panels.update_one({"panel_name": panel_name}, {"$set": {"base_url": base_url, "api_key": new_api}})
-        bot.send_message(message.chat.id, f"✅ API URL & Key for {panel_name} Updated Successfully!")
-    except Exception as e:
-        bot.send_message(message.chat.id, f"❌ Format Error. Use BaseURL|APIKey")
-
-def process_change_main_channel(message):
-    new_link = message.text.strip()
-    set_config("force_link_1", new_link)
-    
-    if "t.me/" in new_link:
-        username = "@" + new_link.split("t.me/")[-1].split("/")[0].split("?")[0]
-        set_config("force_channel_1", username)
-        
-    bot.send_message(message.chat.id, "✅ Main Channel URL Updated Successfully!")
+    new_api = message.text.strip()
+    db.panels.update_one({"panel_name": panel_name}, {"$set": {"api_key": new_api}})
+    bot.send_message(message.chat.id, f"✅ API Key for {panel_name} Updated Successfully!")
 
 def process_change_otp_link(message):
     new_link = message.text.strip()
@@ -1427,7 +1097,12 @@ def process_change_otp_link(message):
         username = "@" + new_link.split("t.me/")[-1].split("/")[0].split("?")[0]
         set_config("otp_group_username", username)
         
-    bot.send_message(message.chat.id, "✅ OTP Group URL Updated Successfully!")
+    bot.send_message(message.chat.id, "🔗 OTP Group URL Updated Successfully!")
+
+def process_change_support_link(message):
+    new_link = message.text.strip()
+    set_config("support_link", new_link)
+    bot.send_message(message.chat.id, "📞 Support Link Updated Successfully!")
 
 def process_change_otp_group_id(message):
     try:
@@ -1474,7 +1149,7 @@ def process_change_range(message, service, panel_name):
         rng = data[1].strip()
         
         db.services.update_one(
-            {"service_name": service, "country_name": country},
+            {"service_name": service, "country_name": country, "panel_name": panel_name},
             {"$set": {"range": rng, "panel_name": panel_name}},
             upsert=True
         )
@@ -1580,33 +1255,23 @@ def send_welcome(message):
     register_user(user_id, username=full_name, referred_by=referred_by)
     
     if not check_join(user_id):
-        bot.send_message(message.chat.id, "🔴 *বটটি ব্যবহার করতে আমাদের চ্যানেলে জয়েন করুন:*", reply_markup=force_join_keyboard())
+        bot.send_message(message.chat.id, "🔴 *Access Revoked!* You must authenticate membership.", reply_markup=force_join_keyboard())
         return
         
-    welcome_text = (
-        f"👋 *হ্যালো {full_name}, আমাদের বটে আপনাকে স্বাগতম!*\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "✨ *Premium Cloud Nodes ব্যবহার করে খুব সহজেই ফ্রি-তে আনলিমিটেড ইনকাম করুন!*\n\n"
-        "🚀 *কীভাবে কাজ করবেন?*\n"
-        "১️⃣ নিচে থেকে `🚀 Get Free Number` এ ক্লিক করে আপনার কাঙ্ক্ষিত সার্ভিসের নম্বর নিন।\n"
-        "২️⃣ সেই নম্বরটি টার্গেট অ্যাপে বসিয়ে কোড সেন্ড করুন।\n"
-        "৩️⃣ আমাদের স্মার্ট সিস্টেম অটোমেটিক OTP রিসিভ করবে এবং সাথে সাথেই আপনার ব্যালেন্সে টাকা জমা হয়ে যাবে!\n\n"
-        "🎁 *এক্সট্রা বোনাস:* বন্ধুদের ইনভাইট করে লাইফটাইম রেফার কমিশন উপভোগ করুন!\n\n"
-        "💬 _যেকোনো সাহায্যে বা উইথড্র নিয়ে কথা বলতে সাপোর্ট টিমের সাথে যোগাযোগ করুন।_"
-    )
+    welcome_text = f"👋 হ্যালো {full_name}, Free OTP Master বটে আপনাকে স্বাগতম!"
     bot.send_message(message.chat.id, welcome_text, reply_markup=main_menu_keyboard(user_id))
 
 @bot.callback_query_handler(func=lambda call: call.data == "check_verified")
 def verify_user_callback(call):
+    try: bot.answer_callback_query(call.id)
+    except: pass
     user_id = call.from_user.id
     if check_join(user_id):
-        try: bot.answer_callback_query(call.id, "✅ Node Verified!", show_alert=True)
-        except: pass
+        bot.answer_callback_query(call.id, "✅ Node Verified!", show_alert=True)
         bot.delete_message(call.message.chat.id, call.message.message_id)
         bot.send_message(call.message.chat.id, "✅ *Verification successful | System ready.*", reply_markup=main_menu_keyboard(user_id))
     else:
-        try: bot.answer_callback_query(call.id, "❌ Verification Failed! Join channel.", show_alert=True)
-        except: pass
+        bot.answer_callback_query(call.id, "❌ Verification Failed! Join channel.", show_alert=True)
 
 @bot.callback_query_handler(func=lambda call: call.data == "req_withdraw")
 def handle_withdraw_request(call):
@@ -1642,7 +1307,7 @@ def handle_text_buttons(message):
         return
         
     if not check_join(user_id):
-        bot.send_message(message.chat.id, "🔴 *বটটি ব্যবহার করতে আমাদের চ্যানেলে জয়েন করুন:*", reply_markup=force_join_keyboard())
+        bot.send_message(message.chat.id, "🔴 *Access Revoked!* Clear membership check.", reply_markup=force_join_keyboard())
         return
         
     text = message.text
@@ -1735,18 +1400,18 @@ def handle_text_buttons(message):
         markup = types.InlineKeyboardMarkup(row_width=2)
         markup.add(
             types.InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/developer1100", style="primary"),
-            types.InlineKeyboardButton("🎧 Support", url="https://t.me/Mahi99909", style="primary")
+            types.InlineKeyboardButton("🎧 Support", url=get_config("support_link", "https://t.me/SR_SOCIAL_AGENCY_ADMIN"), style="primary")
         )
         bot.send_message(message.chat.id, support_text, reply_markup=markup, disable_web_page_preview=True)
 
     elif "GET 2FA" in text.upper():
-        msg = bot.send_message(message.chat.id, "?? *2FA Code Generator*\n\nPlease send me your 2FA Key (Base32 format):", parse_mode="Markdown", reply_markup=reply_cancel_markup())
+        msg = bot.send_message(message.chat.id, "🔐 *2FA Code Generator*\n\nPlease send me your 2FA Key (Base32 format):", parse_mode="Markdown", reply_markup=reply_cancel_markup())
         bot.register_next_step_handler(msg, process_2fa_key)
 
 def process_2fa_key(message):
     key = message.text.strip().replace(" ", "")
-    if key == "/cancel" or key.lower() == "cancel" or key == "? Cancel":
-        bot.send_message(message.chat.id, "? Cancelled.", reply_markup=main_menu_keyboard(message.chat.id))
+    if key == "/cancel" or key.lower() == "cancel" or key == "❌ Cancel":
+        bot.send_message(message.chat.id, "❌ Cancelled.", reply_markup=main_menu_keyboard(message.chat.id))
         return
         
     try:
@@ -1756,19 +1421,19 @@ def process_2fa_key(message):
         code = totp.now()
         remaining = 30 - (int(time.time()) % 30)
         
-        reply_text = f"?? *2FA Code Generator*\n\n?? *Key:* {key}\n\n?? *Code:* {code}\n? *Expires in:* {remaining}s"
+        reply_text = f"🔐 *2FA Code Generator*\n\n🔑 *Key:* `{key}`\n\n🔢 *Code:* `{code}`\n⏳ *Expires in:* `{remaining}s`"
         markup = types.InlineKeyboardMarkup(row_width=2)
-        btn_refresh = types.InlineKeyboardButton("?? Refresh Code", callback_data=f"2fa_refresh:{key}", style="success")
-        btn_new = types.InlineKeyboardButton("? New", callback_data="2fa_new", style="primary")
+        btn_refresh = types.InlineKeyboardButton("🔄 Refresh Code", callback_data=f"2fa_refresh:{key}", style="success")
+        btn_new = types.InlineKeyboardButton("➕ New", callback_data="2fa_new", style="primary")
         markup.add(btn_refresh, btn_new)
         
-        bot.send_message(message.chat.id, "? Success!", reply_markup=main_menu_keyboard(message.chat.id))
+        bot.send_message(message.chat.id, "✅ Success!", reply_markup=main_menu_keyboard(message.chat.id))
         bot.send_message(message.chat.id, reply_text, reply_markup=markup, parse_mode="Markdown")
     except Exception as e:
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("? Try Again", callback_data="2fa_new", style="primary"))
-        bot.send_message(message.chat.id, "? Failed!", reply_markup=main_menu_keyboard(message.chat.id))
-        bot.send_message(message.chat.id, f"?? *Invalid 2FA Key!* Make sure it's a valid Base32 secret.", reply_markup=markup, parse_mode="Markdown")
+        markup.add(types.InlineKeyboardButton("➕ Try Again", callback_data="2fa_new", style="primary"))
+        bot.send_message(message.chat.id, "❌ Failed!", reply_markup=main_menu_keyboard(message.chat.id))
+        bot.send_message(message.chat.id, f"🔴 *Invalid 2FA Key!* Make sure it's a valid Base32 secret.", reply_markup=markup, parse_mode="Markdown")
 
 def process_withdrawal_request(message, current_balance):
     try:
@@ -1912,6 +1577,134 @@ def handle_withdrawal_actions(call):
         try: bot.send_message(target_uid, f"🔴 *আপনার উইথড্রাল রিকোয়েস্টটি বাতিল হয়েছে!*\n💰 Amount: `{amount}` ৳ রিফান্ড করা হয়েছে।")
         except: pass
 
+    elif action == "adm_close" or action == "cancel_step":
+        bot.delete_message(chat_id, call.message.message_id)
+        bot.clear_step_handler_by_chat_id(chat_id)
+
+    elif action == "adm_bulk_order":
+        bot.edit_message_text("📦 *Select Target Protocol for Bulk Order:*", chat_id, call.message.message_id, reply_markup=bulk_service_menu_keyboard())
+
+    elif action == "adm_back":
+        total_users = db.users.count_documents({})
+        active_panels = list(db.panels.find({"is_active": True}))
+        pnames = ", ".join([p["panel_name"] for p in active_panels]) if active_panels else "Zenex (Legacy)"
+        msg = f"👥 *Main Control Console V8.0*\n\n_Manage networks, configurations, and user operations seamlessly._\n\n👥 *Total Users:* `{total_users}`\n⚡ *Active Panels:* `{pnames}`"
+        bot.edit_message_text(msg, chat_id, call.message.message_id, reply_markup=admin_panel_keyboard(user_id), parse_mode="Markdown")
+
+    elif action == "adm_upload_txt":
+        if not is_primary_admin(user_id): return bot.answer_callback_query(call.id, "❌ Access Denied", show_alert=True)
+        bot.edit_message_text("📤 *UPLOAD TEXT FILE (.txt)*\n\n_Select a service to upload numbers:_", chat_id, call.message.message_id, reply_markup=upload_txt_keyboard())
+
+    elif action.startswith("up_srv_"):
+        if not is_primary_admin(user_id): return bot.answer_callback_query(call.id, "❌ Access Denied", show_alert=True)
+        srv_name = action.split("up_srv_")[1]
+        msg = bot.send_message(chat_id, f"📤 *Upload .txt file for {srv_name}*", reply_markup=cancel_markup())
+        bot.register_next_step_handler(msg, process_txt_upload, srv_name)
+
+    elif action == "adm_panels_menu":
+        if not is_primary_admin(user_id): return bot.answer_callback_query(call.id, "❌ Access Denied", show_alert=True)
+        bot.edit_message_text("⚙️ *PANEL MANAGEMENT SYSTEM*\n\n_Select a panel to activate it, or add/delete panels:_", chat_id, call.message.message_id, reply_markup=panels_menu_keyboard())
+
+    elif action == "adm_add_panel":
+        if not is_primary_admin(user_id): return bot.answer_callback_query(call.id, "❌ Access Denied", show_alert=True)
+        msg = bot.send_message(chat_id, "➕ *Enter New Panel Details:*\n\nFormat:\n`PanelName|BaseURL|APIKey`\n\n_(Example: `SMSHadi|http://smshadi.net|XYZ123`)_", reply_markup=cancel_markup(), parse_mode="Markdown")
+        bot.register_next_step_handler(msg, process_add_panel)
+
+    elif action == "adm_del_panel":
+        if not is_primary_admin(user_id): return bot.answer_callback_query(call.id, "❌ Access Denied", show_alert=True)
+        bot.edit_message_text("🗑️ *DELETE PANEL*\n\n_Select a panel to delete (Active panel cannot be deleted):_", chat_id, call.message.message_id, reply_markup=panels_del_keyboard())
+
+    elif action.startswith("pnl_toggle_"):
+        if not is_primary_admin(user_id): return bot.answer_callback_query(call.id, "❌ Access Denied", show_alert=True)
+        from bson.objectid import ObjectId
+        p_id = action.split("pnl_toggle_")[1]
+        panel = db.panels.find_one({"_id": ObjectId(p_id)})
+        new_status = not panel.get("is_active", False)
+        p_name = panel.get('panel_name', 'Unknown')
+        
+        if new_status:
+            log_text = f"✅ {p_name} Panel was Activated!"
+        else:
+            log_text = f"❌ {p_name} Panel was Deactivated!"
+            
+        db.panels.update_one({"_id": ObjectId(p_id)}, {"$set": {"is_active": new_status}})
+        bot.answer_callback_query(call.id, log_text, show_alert=False)
+        msg_text = f"⚙️ *PANEL MANAGEMENT SYSTEM*\n\n_Select a panel to activate it, or add/delete panels:_\n\n━━━━━━━━━━━━━━━━━━━\n📡 *System Log:* `{log_text}`\n━━━━━━━━━━━━━━━━━━━"
+        bot.edit_message_text(msg_text, chat_id, call.message.message_id, reply_markup=panels_menu_keyboard(), parse_mode="Markdown")
+
+    elif action.startswith("pnl_del_"):
+        if not is_primary_admin(user_id): return bot.answer_callback_query(call.id, "❌ Access Denied", show_alert=True)
+        from bson.objectid import ObjectId
+        p_id = action.split("pnl_del_")[1]
+        panel_to_del = db.panels.find_one({"_id": ObjectId(p_id)})
+        if panel_to_del and panel_to_del.get("is_active"):
+            bot.answer_callback_query(call.id, "⚠️ Cannot delete an active panel!", show_alert=True)
+        else:
+            db.panels.delete_one({"_id": ObjectId(p_id)})
+            bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=panels_del_keyboard())
+
+    elif action == "adm_stats":
+        if not has_permission(user_id, "stats"): return bot.answer_callback_query(call.id, "❌ Access Denied", show_alert=True)
+        today_date = time.strftime('%Y-%m-%d')
+        today_otps = db.otps_history.count_documents({"date": today_date})
+        total_otps = db.otps_history.count_documents({})
+        one_min_ago = time.time() - 60
+        active_users = db.users.count_documents({"last_active": {"$gte": one_min_ago}})
+        msg = (
+            f"📊 *Live Statistics*\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"🔹 *Today's OTPs:* `{today_otps}`\n"
+            f"🔹 *Total OTPs:* `{total_otps}`\n"
+            f"🔹 *Active Users:* `{active_users}`\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"🎯 *Select a date below to view specific statistics:*"
+        )
+        bot.edit_message_text(msg, chat_id, call.message.message_id, reply_markup=stats_date_keyboard())
+
+    elif action.startswith("statdate_"):
+        if not has_permission(user_id, "stats"): return bot.answer_callback_query(call.id, "❌ Access Denied", show_alert=True)
+        target_date = action.split("_")[1]
+        count = db.otps_history.count_documents({"date": target_date})
+        pipeline = [
+            {"$match": {"date": target_date}},
+            {"$group": {"_id": "$service", "count": {"$sum": 1}}}
+        ]
+        breakdown = list(db.otps_history.aggregate(pipeline))
+        panel_breakdown = "\n".join([f"🔹 {item['_id']}: {item['count']}" for item in breakdown])
+        text = f"📊 *Statistics for {target_date}*\n━━━━━━━━━━━━━━━━━━━\n🎯 *Total OTPs Received:* `{count}`\n\n{panel_breakdown}\n━━━━━━━━━━━━━━━━━━━\n"
+        bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=stats_date_keyboard())
+
+    elif action == "adm_toggle_notif":
+        if not is_primary_admin(user_id): return bot.answer_callback_query(call.id, "❌ Access Denied", show_alert=True)
+        current = get_config("admin_notifications", "1")
+        new_val = "0" if current == "1" else "1"
+        set_config("admin_notifications", new_val)
+        bot.answer_callback_query(call.id, f"Notifications {'Disabled' if new_val == '0' else 'Enabled'}!", show_alert=False)
+        total_users = db.users.count_documents({})
+        active_panels = list(db.panels.find({"is_active": True}))
+        pnames = ", ".join([p["panel_name"] for p in active_panels]) if active_panels else "Zenex (Legacy)"
+        msg = f"👥 *Main Control Console V8.0*\n\n_Manage networks, configurations, and user operations seamlessly._\n\n👥 *Total Users:* `{total_users}`\n⚡ *Active Panels:* `{pnames}`"
+        bot.edit_message_text(msg, chat_id, call.message.message_id, reply_markup=admin_panel_keyboard(user_id), parse_mode="Markdown")
+
+    elif action == "adm_stockouts":
+        recent_logs = list(db.stock_outs.find().sort("timestamp", -1).limit(10))
+        if not recent_logs:
+            text = "⚠️ *No recent stockouts recorded.*"
+        else:
+            text = "⚠️ *Recent Stock Out Logs:*\n\n"
+            for log in recent_logs:
+                from datetime import datetime
+                dt = datetime.fromtimestamp(log.get("timestamp", 0)).strftime('%Y-%m-%d %H:%M')
+                text += f"🔹 `{dt}` - *{log.get('service_name')}* (+{log.get('range')}000000)\n"
+        text += "\n_Showing last 10 entries._"
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔙 Return to Home", callback_data="adm_back"))
+        bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
+
+    elif action == "adm_ranges_menu":
+        if not has_permission(user_id, "ranges"): return bot.answer_callback_query(call.id, "❌ Access Denied", show_alert=True)
+        bot.edit_message_text("⚙️ *ROUTE MANAGEMENT SYSTEM*\n\n_Select an action to modify network routes:_", chat_id, call.message.message_id, reply_markup=admin_ranges_keyboard())
+
 @bot.callback_query_handler(func=lambda call: call.data.startswith("bsrv_") or call.data == "back_to_bulk_services")
 def handle_bulk_service_selection(call):
     try: bot.answer_callback_query(call.id)
@@ -1959,19 +1752,12 @@ def process_bulk_order_quantity(message, service_name, country_node):
     target_range = s_row['range']
     panel_name = s_row.get("panel_name", "Zenex")
     active_panel = db.panels.find_one({"panel_name": panel_name})
-    if active_panel and not active_panel.get("is_active"):
-        bot.send_message(chat_id, f"❌ *{panel_name} panel is currently deactivated!*", parse_mode="Markdown")
-        return
     if not active_panel: active_panel = get_active_panel()
-    if not active_panel or not active_panel.get("is_active"):
-        bot.send_message(chat_id, "❌ *No active panels available!*", parse_mode="Markdown")
-        return
-        
     base_url = active_panel['base_url'].rstrip('/')
     api_url = f"{base_url}/getnum" if "@public" in base_url else f"{base_url}/v1/getnum"
     payload = {"range": target_range, "rid": target_range, "is_national": False, "remove_plus": False}
     
-    loading_msg = bot.send_message(chat_id, f"⏳ *Allocating {qty} numbers... Please wait.*")
+    loading_msg = bot.send_message(chat_id, f"⏳ *NUMBER ALLOCATING...*\n━━━━━━━━━━━━━━━━━━━\n📡 *Service:* `{service_name.upper()}`\n🌍 *Country:* `{country_node}`\n📦 *Quantity:* `{qty}`\n━━━━━━━━━━━━━━━━━━━\n⚡ _Please wait while we fetch your numbers..._", parse_mode="Markdown")
     
     success_numbers = []
     
@@ -2058,7 +1844,7 @@ def bulk_free_poll_otp_thread(chat_id, success_numbers, service_name, user_id, b
                                     )
                                     
                                     markup = types.InlineKeyboardMarkup()
-                                    markup.add(types.InlineKeyboardButton(text=f"📋 CODE: {otp_code}", copy_text=types.CopyTextButton(text=otp_code, style="primary")))
+                                    markup.add(types.InlineKeyboardButton(text=f"📋 CODE: {otp_code}", copy_text=types.CopyTextButton(text=otp_code), style="success"))
                                     otp_group_id = get_config("otp_group_id", str(FORWARD_GROUP_ID))
                                     try: bot.send_message(int(otp_group_id), group_msg, reply_markup=markup, parse_mode="Markdown")
                                     except: pass
@@ -2072,18 +1858,7 @@ def threaded_getnum_retry(chat_id, user_id, service_name, country_node, s_row, l
     target_range = s_row['range']
     if target_range not in tried_ranges:
         tried_ranges.append(target_range)
-    panel_name = s_row.get("panel_name", "Zenex")
-    active_panel = db.panels.find_one({"panel_name": panel_name})
-    if active_panel and not active_panel.get("is_active"):
-        try: bot.edit_message_text(f"❌ *{panel_name} panel is currently deactivated!*", chat_id, loading_msg_id, parse_mode="Markdown")
-        except: pass
-        return
-    if not active_panel: active_panel = get_active_panel()
-    if not active_panel or not active_panel.get("is_active"):
-        try: bot.edit_message_text("❌ *No active panels available!*", chat_id, loading_msg_id, parse_mode="Markdown")
-        except: pass
-        return
-        
+    active_panel = get_active_panel()
     base_url = active_panel['base_url'].rstrip('/')
     api_url = f"{base_url}/getnum" if "@public" in base_url else f"{base_url}/v1/getnum"
     payload = {"range": target_range, "rid": target_range, "is_national": False, "remove_plus": False}
@@ -2113,21 +1888,19 @@ def threaded_getnum_retry(chat_id, user_id, service_name, country_node, s_row, l
                 import urllib.parse
                 country_name_disp, country_flag, country_code = get_country_info(allocated_number)
                 
+                icon = "📸" if "instagram" in service_name.lower() else "📘" if "facebook" in service_name.lower() else "💬" if "whatsapp" in service_name.lower() else "🌐"
                 allocated_ui = (
-                    "🎯 *NUMBER ALLOCATED SUCCESSFULLY*\n"
-                    "━━━━━━━━━━━━━━━━━━━\n"
-                    f"📱 *Service:* `{service_name.upper()}`\n"
-                    f"🌍 *Region:* {country_flag} {country_name_disp.upper()} (+{country_code})\n"
-                    "━━━━━━━━━━━━━━━━━━━\n"
-                    f"📞 *Your Number:* `{allocated_number}`\n"
-                    "⏳ *Timeout:* `15 Minutes`\n"
-                    "━━━━━━━━━━━━━━━━━━━\n"
-                    "🔄 _Status: Listening for incoming OTP..._\n"
-                    "⚠️ _(Do not close this menu until OTP arrives)_"
+                    "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
+                    f" {icon} *{service_name.upper()}* {country_flag} {country_name_disp}\n"
+                    " ⏳ _Waiting for OTP..._ 🔄\n"
+                    " ⏰ *Expire (15 min)*\n"
+                    " ⚠️ _Do not close this menu._\n"
+                    "╰━━━━━━━━━━━━━━━━━━━━━━╯"
                 )
                 
                 otp_link = get_config("otp_group_link", "https://t.me/FreeOtpMaster")
                 allocated_markup = types.InlineKeyboardMarkup(row_width=2)
+                allocated_markup.add(types.InlineKeyboardButton(f"📋 {allocated_number if str(allocated_number).startswith('+') else '+' + str(allocated_number)}", copy_text=types.CopyTextButton(text=allocated_number), style="success"))
                 allocated_markup.add(
                     types.InlineKeyboardButton("🔄 Change Target", callback_data=f"srv_{service_name}", style="danger"),
                     types.InlineKeyboardButton("↗️ View OTP Group", url=otp_link, style="primary")
@@ -2136,7 +1909,7 @@ def threaded_getnum_retry(chat_id, user_id, service_name, country_node, s_row, l
                 allocated_markup.add(types.InlineKeyboardButton("❌ Close", callback_data="cancel_step", style="danger"))
                 
                 success_msg = bot.send_message(chat_id, allocated_ui, reply_markup=allocated_markup)
-                threading.Thread(target=free_poll_otp_thread, args=(chat_id, success_msg.message_id, allocated_number, service_name, user_id, active_panel['base_url'], active_panel['api_key']), daemon=True).start()
+                threading.Thread(target=free_poll_otp_thread, args=(chat_id, success_msg.message_id, allocated_number, service_name, user_id, active_panel['base_url'], active_panel['api_key'], locals().get('target_range', locals().get('country_node'))), daemon=True).start()
                 
                 success = True
                 break
@@ -2191,16 +1964,24 @@ def handle_service_selection(call):
         
     try:
         service_name = call.data.split("_")[1]
-        best_route = db.services.find_one({"service_name": service_name}, sort=[("hits", -1)])
-        
+        active_panel = get_active_panel()
+        active_pname = active_panel.get('panel_name', 'Zenex')
+        best_route = db.services.find_one({"service_name": service_name, "panel_name": active_pname}, sort=[("hits", -1)])
         hot_msg = ""
         if best_route and best_route.get("hits", 0) > 10:
             c_part = best_route.get('country_name', '').split(" | ")[0]
+            c_part = c_part.replace('_', '\\_').replace('*', '\\*').replace('`', '\\`').replace('[', '\\[')
             hot_msg = f"\n\n🔥 *HOT ALERT:* বর্তমানে *{c_part}* এ সবচেয়ে ভালো *OTP* দিচ্ছে!"
             
         msg_text = f"🌍 *সার্ভিস:* `{service_name}`{hot_msg}\n\nসবচেয়ে বেশি *Hits* থাকা *Range* সিলেক্ট করুন তাহলে ভালো *OTP* পাবেন।\n*OTP* সেন্ড করার পর ৫ সেকেন্ড অপেক্ষা করুন, কোড না পেলে *Resend* করুন।"
         bot.edit_message_text(msg_text, chat_id, call.message.message_id, reply_markup=country_menu_keyboard(service_name))
     except Exception as e:
+        import traceback
+        err_str = f"ERROR: {str(e)}\n{traceback.format_exc()[-500:]}"
+        logger.error(err_str)
+        err_str = err_str.replace('_', '\\\\_').replace('*', '\\\\*').replace('`', '\\\\`').replace('[', '\\\\[')
+        try: bot.send_message(chat_id, err_str)
+        except: pass
         bot.answer_callback_query(call.id, "Session Expired! Please /start", show_alert=True)
         restart_markup = types.InlineKeyboardMarkup()
         restart_markup.add(types.InlineKeyboardButton("🔄 রিস্টার্ট করুন (Restart)", url=f"https://t.me/{BOT_USERNAME}?start=refresh"))
@@ -2220,7 +2001,7 @@ def handle_country_and_purchase(call):
     u_row = db.users.find_one({"user_id": user_id})
     if u_row:
         last_active = u_row.get("last_active", 0)
-        if time.time() - last_active > 86400:
+        if False:
             bot.answer_callback_query(call.id, "Session Expired! Please /start", show_alert=True)
             restart_markup = types.InlineKeyboardMarkup()
             restart_markup.add(types.InlineKeyboardButton("🔄 রিস্টার্ট করুন (Restart)", url=f"https://t.me/{BOT_USERNAME}?start=refresh"))
@@ -2232,7 +2013,9 @@ def handle_country_and_purchase(call):
     country_node = data_parts[2]
     
     if country_node == "AUTO-BEST":
-        s_row = db.services.find_one({"service_name": service_name}, sort=[("hits", -1)])
+        active_panel = get_active_panel()
+        active_pname = active_panel.get('panel_name', 'Zenex')
+        s_row = db.services.find_one({"service_name": service_name, "panel_name": active_pname}, sort=[("hits", -1)])
         if not s_row:
             bot.answer_callback_query(call.id, "❌ No active routes found!", show_alert=True)
             return
@@ -2268,13 +2051,7 @@ def handle_country_and_purchase(call):
     target_range = s_row['range']
     panel_name = s_row.get("panel_name", "Zenex")
     active_panel = db.panels.find_one({"panel_name": panel_name})
-    if active_panel and not active_panel.get("is_active"):
-        bot.answer_callback_query(call.id, f"❌ {panel_name} is turned OFF!", show_alert=True)
-        return
     if not active_panel: active_panel = get_active_panel()
-    if not active_panel or not active_panel.get("is_active"):
-        bot.answer_callback_query(call.id, "❌ No active panels!", show_alert=True)
-        return
     loading_msg = bot.send_message(chat_id, "⏳ *নম্বর লোডিং হচ্ছে...*")
     
     if active_panel.get("is_manual", False):
@@ -2297,21 +2074,19 @@ def handle_country_and_purchase(call):
         import urllib.parse
         country_name_disp, country_flag, country_code = get_country_info(allocated_number)
         
+        icon = "📸" if "instagram" in service_name.lower() else "📘" if "facebook" in service_name.lower() else "💬" if "whatsapp" in service_name.lower() else "🌐"
         allocated_ui = (
-            "🎯 *NUMBER ALLOCATED SUCCESSFULLY*\n"
-            "━━━━━━━━━━━━━━━━━━━\n"
-            f"📱 *Service:* `{service_name.upper()}`\n"
-            f"🌍 *Region:* {country_flag} {country_name_disp.upper()} (+{country_code})\n"
-            "━━━━━━━━━━━━━━━━━━━\n"
-            f"📞 *Your Number:* `{allocated_number}`\n"
-            "⏳ *Timeout:* `15 Minutes`\n"
-            "━━━━━━━━━━━━━━━━━━━\n"
-            "🔄 _Status: Listening for incoming OTP..._\n"
-            "⚠️ _(Do not close this menu until OTP arrives)_"
+            "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
+            f" {icon} *{service_name.upper()}* {country_flag} {country_name_disp}\n"
+            " ⏳ _Waiting for OTP..._ 🔄\n"
+            " ⏰ *Expire (15 min)*\n"
+            " ⚠️ _Do not close this menu._\n"
+            "╰━━━━━━━━━━━━━━━━━━━━━━╯"
         )
         
         otp_link = get_config("otp_group_link", "https://t.me/FreeOtpMaster")
         allocated_markup = types.InlineKeyboardMarkup(row_width=2)
+        allocated_markup.add(types.InlineKeyboardButton(f"📋 {allocated_number if str(allocated_number).startswith('+') else '+' + str(allocated_number)}", copy_text=types.CopyTextButton(text=allocated_number), style="success"))
         allocated_markup.add(
             types.InlineKeyboardButton("🔄 Change Target", callback_data=f"srv_{service_name}", style="danger"),
             types.InlineKeyboardButton("↗️ View OTP Group", url=otp_link, style="primary")
@@ -2320,11 +2095,11 @@ def handle_country_and_purchase(call):
         allocated_markup.add(types.InlineKeyboardButton("❌ Close", callback_data="cancel_step", style="danger"))
         
         success_msg = bot.send_message(chat_id, allocated_ui, reply_markup=allocated_markup)
-        threading.Thread(target=free_poll_otp_thread, args=(chat_id, success_msg.message_id, allocated_number, service_name, user_id, active_panel['base_url'], active_panel['api_key']), daemon=True).start()
+        threading.Thread(target=free_poll_otp_thread, args=(chat_id, success_msg.message_id, allocated_number, service_name, user_id, active_panel['base_url'], active_panel['api_key'], locals().get('target_range', locals().get('country_node'))), daemon=True).start()
 
     else:
         threading.Thread(target=threaded_getnum_retry, args=(chat_id, user_id, service_name, country_node, s_row, loading_msg.message_id), daemon=True).start()
-def free_poll_otp_thread(chat_id, message_id, allocated_number, service_name, user_id, base_url, api_key):
+def free_poll_otp_thread(chat_id, message_id, allocated_number, service_name, user_id, base_url, api_key, target_range=None):
     start_time = time.time()
     check_url = f"{base_url}/success-otp" if "@public" in base_url else f"{base_url}/v1/numsuccess/info"
     country_name, country_flag, country_code = get_country_info(allocated_number)
@@ -2370,47 +2145,29 @@ def free_poll_otp_thread(chat_id, message_id, allocated_number, service_name, us
                             db.ref_history.insert_one({"referrer_id": referred_by, "amount": commission, "timestamp": time.time()})
                             
                         current_balance = u_data['balance']
-                        premium_ui_msg = (
-                            "╔════════════════════════╗\n"
-                            "       📩  *NEW OTP RECEIVED* 📩\n"
-                            "╚════════════════════════╝\n"
-                            f"🌐 *Origin:* {country_flag} {country_name}\n"
-                            f"📱 *Phone:* `{allocated_number}`\n"
-                            "──────────────────────────\n"
-                            f"🔑 *OTP CODE:* `{otp_code}`\n"
-                            "──────────────────────────\n"
-                            f"⚡ *Service:* {service_name.upper()}\n"
-                            f"💰 *Node Bounty:* +{reward_amt:.4f} ৳\n"
-                            f"💵 *Net Wallet Balance:* {current_balance:.4f} ৳\n"
-                            "──────────────────────────"
-                        )
-                        
-                        try: bot.edit_message_text(premium_ui_msg, chat_id, message_id)
-                        except: bot.send_message(chat_id, premium_ui_msg)
-                        safe_sms = raw_sms.replace("`", "'")
                         user_otp_msg = (
-                            f"✅ *SUCCESSFULLY RECEIVED OTP*\n"
+                            f"✅ *OTP RECEIVED SUCCESSFULLY*\n"
                             f"━━━━━━━━━━━━━━━━━━━\n"
-                            f"📱 *Number:* `{allocated_number}`\n"
-                            f"🌍 *Country:* {country_flag} {country_name}\n"
-                            f"⚡ *Service:* {service_name.upper()}\n"
-                            f"━━━━━━━━━━━━━━━━━━━\n"
-                            f"💬 *SMS Message:*\n"
-                            f"`{safe_sms}`\n"
+                            f"📱 *Service:* `{service_name.upper()}`\n"
+                            f"🌍 *Country:* {country_flag} `{country_name}`\n"
+                            f"📞 *Number:* `{allocated_number}`\n"
+                            f"💰 *Earned:* `+{reward_amt:.4f} ৳`\n"
                             f"━━━━━━━━━━━━━━━━━━━\n"
                             f"👇 _Click the button below to copy OTP_"
                         )
+                        
                         otp_markup = types.InlineKeyboardMarkup(row_width=2)
                         otp_markup.add(
-                            types.InlineKeyboardButton(f"🟦 Copy OTP: {otp_code}", copy_text=types.CopyTextButton(text=otp_code, style="success"))
+                            types.InlineKeyboardButton(f"📋 {otp_code}", copy_text=types.CopyTextButton(text=otp_code, style="success"))
                         )
                         otp_group_link = get_config("otp_group_link", "https://t.me/FreeOtpMaster")
                         otp_markup.add(
-                            types.InlineKeyboardButton("🟩 Get Another Number", callback_data=f"sel_{service_name}_AUTO-BEST", style="primary"),
-                            types.InlineKeyboardButton("📢 OTP GROUP", url=otp_group_link, style="primary")
+                            types.InlineKeyboardButton("🔄 Get Another Number", callback_data=f"sel_{service_name}_RNG_{target_range}" if target_range and target_range[0].isdigit() and len(f"sel_{service_name}_RNG_{target_range}") <= 64 else f"sel_{service_name}_{target_range}" if target_range and len(f"sel_{service_name}_{target_range}") <= 64 else f"sel_{service_name}_AUTO-BEST", style="primary"),
+                            types.InlineKeyboardButton("👁️ OTP GROUP", url=otp_group_link, style="primary")
                         )
-                        try: bot.send_message(int(user_id), user_otp_msg, reply_markup=otp_markup, parse_mode="Markdown")
-                        except: pass
+                        
+                        try: bot.edit_message_text(user_otp_msg, chat_id, message_id, reply_markup=otp_markup, parse_mode="Markdown")
+                        except: bot.send_message(int(user_id), user_otp_msg, reply_markup=otp_markup, parse_mode="Markdown")
                         
                         icon = "📸" if "instagram" in service_name.lower() else "📘" if "facebook" in service_name.lower() else "💬"
                         group_msg = (
@@ -2427,7 +2184,7 @@ def free_poll_otp_thread(chat_id, message_id, allocated_number, service_name, us
                         )
                         
                         markup = types.InlineKeyboardMarkup(row_width=2)
-                        markup.add(types.InlineKeyboardButton(text=f"📋 CODE: {otp_code}", copy_text=types.CopyTextButton(text=otp_code, style="primary")))
+                        markup.add(types.InlineKeyboardButton(text=f"📋 CODE: {otp_code}", copy_text=types.CopyTextButton(text=otp_code), style="success"))
                         markup.add(types.InlineKeyboardButton(text="📞 VIEW BOT", url=f"https://t.me/{BOT_USERNAME}", style="success"))
                         
                         otp_group_id = get_config("otp_group_id", str(FORWARD_GROUP_ID))
@@ -2460,97 +2217,70 @@ def auto_route_updater_thread():
 
     while True:
         try:
-            seen_routes = []
-            zenex_panel = db.panels.find_one({"panel_name": "Zenex", "is_active": True})
+            zenex_panel = db.panels.find_one({"panel_name": "Zenex"})
             if zenex_panel:
                 base = zenex_panel['base_url'].rstrip('/')
                 res = http_session.get(base + '/v1/active-ranges', headers={'mapikey': zenex_panel['api_key']}, timeout=10).json()
                 active_ranges = res.get("data", {}).get("active_ranges", [])
-                for route in active_ranges:
-                    service_name = str(route.get("service", ""))
-                    target_range = str(route.get("range", ""))
-                    hits = int(route.get("hits", 0))
-                    if not service_name or not target_range: continue
-                    clean_range = target_range.replace("X", "0").replace("x", "0")
-                    try:
-                        from panel import get_country_info
-                        name, flag, _ = get_country_info("+" + clean_range + "0000000")
-                        short_name = name.split()[0][:8] if name else "Unknown"
-                        c_name = f"{flag} {short_name} | 🔥 hits {hits}"
-                    except:
-                        c_name = f"🔥 hits {hits}"
-                    db.services.update_one(
-                        {"service_name": service_name, "range": target_range},
-                        {"$set": {"country_name": c_name, "panel_name": "Zenex", "hits": hits}},
-                        upsert=True
-                    )
-                    seen_routes.append({"service_name": service_name, "range": target_range})
-            
-            stex_panel = db.panels.find_one({"base_url": {"$regex": "@public"}, "is_active": True}) or db.panels.find_one({"panel_name": {"$regex": "Stexsms", "$options": "i"}, "is_active": True})
-            if stex_panel:
-                base = stex_panel['base_url'].rstrip('/')
-                if "@public/api" in base:
-                    base_v1 = base.replace("@public/api", "api")
-                else:
-                    base_v1 = base
-                
-                headers = {'mauthapi': stex_panel['api_key'], 'mapikey': stex_panel['api_key']}
-                try:
-                    res = http_session.get(base_v1 + '/v1/active-ranges', headers=headers, timeout=10).json()
-                    active_ranges = res.get("data", {}).get("active_ranges") if res else []
-                    
-                    if not active_ranges:
-                        try: res = http_session.get(base + '/console', headers=headers, timeout=10).json()
-                        except: res = {}
-                        otps = res.get("data", {}).get("hits") or res.get("data", {}).get("otps", [])
-                        range_counts = {}
-                        service_map = {}
-                        for otp in otps:
-                            sid = str(otp.get("sid", "")).lower()
-                            msg = str(otp.get("message", "")).lower()
-                            if "facebook" in sid: s_name = "Instagram" if "instagram" in msg else "Facebook"
-                            elif "instagram" in sid: s_name = "Instagram"
-                            else: continue
-                            tr = str(otp.get("range", ""))
-                            if not tr: continue
-                            range_counts[tr] = range_counts.get(tr, 0) + 1
-                            service_map[tr] = s_name
-                        active_ranges = [{"service": service_map[tr], "range": tr, "hits": hits} for tr, hits in range_counts.items()]
-                        
+                if active_ranges:
                     for route in active_ranges:
                         service_name = str(route.get("service", ""))
-                        if not service_name:
-                            sid = str(route.get("sid", "")).lower()
-                            if "facebook" in sid: service_name = "Facebook"
-                            elif "instagram" in sid: service_name = "Instagram"
-                            
                         target_range = str(route.get("range", ""))
-                        hits = int(route.get("hits", route.get("success", route.get("count", 0))))
+                        hits = int(route.get("hits", 0))
                         if not service_name or not target_range: continue
-                        
                         clean_range = target_range.replace("X", "0").replace("x", "0")
                         try:
                             from panel import get_country_info
                             name, flag, _ = get_country_info("+" + clean_range + "0000000")
                             short_name = name.split()[0][:8] if name else "Unknown"
-                            c_name = f"{flag} {short_name} | 🔥 hits {hits}" if hits else f"{flag} {short_name} | Auto"
+                            c_name = f"{flag} {short_name} | 🔥 hits {hits}"
                         except:
-                            c_name = f"🔥 hits {hits}" if hits else f"Auto: {target_range}"
-                            
+                            c_name = f"🔥 hits {hits}"
                         db.services.update_one(
-                            {"service_name": service_name, "range": target_range},
-                            {"$set": {"country_name": c_name, "panel_name": stex_panel['panel_name'], "hits": hits}},
+                            {"service_name": service_name, "range": target_range, "panel_name": "Zenex"},
+                                {"$set": {"country_name": c_name, "panel_name": "Zenex", "hits": hits, "last_updated": time.time()}},
                             upsert=True
                         )
-                        seen_routes.append({"service_name": service_name, "range": target_range})
+                    db.services.delete_many({"panel_name": "Zenex", "last_updated": {"$lt": time.time() - 300}})
+            
+            stex_panel = db.panels.find_one({"panel_name": {"$regex": "stex", "$options": "i"}})
+            if stex_panel:
+                try:
+                    base = stex_panel['base_url'].rstrip('/')
+                    headers = {'mauthapi': stex_panel['api_key']}
+                    res = http_session.get(base + '/console', headers=headers, timeout=10).json()
+                    otps = res.get("data", {}).get("otps", [])
+                    stex_hits = {}
+                    for otp in otps:
+                        sid = str(otp.get("sid", "")).lower()
+                        if "facebook" in sid: service_name = "Facebook"
+                        elif "instagram" in sid: service_name = "Instagram"
+                        else: continue
+                        target_range = str(otp.get("range", ""))
+                        if not target_range: continue
+                        key = (service_name, target_range)
+                        stex_hits[key] = stex_hits.get(key, 0) + 1
+                        
+                    if stex_hits:
+                        for (service_name, target_range), hits in stex_hits.items():
+                            clean_range = target_range.replace("X", "0").replace("x", "0")
+                            boosted_hits = 20 + hits # Ensure it is shown as BOOM
+                            try:
+                                from panel import get_country_info
+                                name, flag, _ = get_country_info("+" + clean_range + "0000000")
+                                short_name = name.split()[0][:8] if name else "Unknown"
+                                c_name = f"{flag} {short_name} | 🔥 hits {boosted_hits}"
+                            except:
+                                c_name = f"🔥 hits {boosted_hits}"
+                                
+                            db.services.update_one(
+                                {"service_name": service_name, "range": target_range, "panel_name": stex_panel["panel_name"]},
+                                {"$set": {"country_name": c_name, "panel_name": stex_panel["panel_name"], "hits": boosted_hits, "last_updated": time.time()}},
+                                upsert=True
+                            )
+                        db.services.delete_many({"panel_name": stex_panel["panel_name"], "last_updated": {"$lt": time.time() - 300}})
                 except:
                     pass
-            
-            if seen_routes:
-                all_services = db.services.find({})
-                for srv in all_services:
-                    if {"service_name": srv.get("service_name"), "range": srv.get("range")} not in seen_routes:
-                        db.services.delete_one({"_id": srv["_id"]})
             
             try:
                 for s in db.services.distinct("service_name"):
@@ -2564,8 +2294,7 @@ def auto_route_updater_thread():
                     if old_top_range and old_top_range != new_top_range and new_hits >= 20:
                         c_part = new_top.get('country_name', '').split(" | ")[0]
                         msg = f"🔥 *HOT ROUTE ALERT*\n\n🌍 *সার্ভিস:* `{s}`\n🚀 বর্তমানে *{c_part}* এ সবচেয়ে ভালো OTP দিচ্ছে! সবাই এই নাম্বারে কাজ করুন।"
-                        otp_group_id = get_config("otp_group_id", str(FORWARD_GROUP_ID))
-                        try: bot.send_message(int(otp_group_id), msg, parse_mode="Markdown")
+                        try: bot.send_message("@FreeOtpMaster", msg, parse_mode="Markdown")
                         except: pass
                         previous_tops[s] = new_top_range
                     elif not old_top_range:
@@ -2575,7 +2304,7 @@ def auto_route_updater_thread():
                 
         except Exception as e:
             logger.error(f"Auto Route Updater Error: {e}")
-        time.sleep(60)
+        time.sleep(180)
 
 if __name__ == "__main__":
     logger.info("=============================================")
