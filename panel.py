@@ -1934,7 +1934,7 @@ def threaded_getnum_retry(chat_id, user_id, service_name, country_node, s_row, l
                 allocated_markup.add(types.InlineKeyboardButton("❌ Close", callback_data="cancel_step", style="danger"))
                 
                 # Invisible text hack for UI
-                success_msg = bot.send_message(chat_id, "\u200b", reply_markup=allocated_markup)
+                success_msg = bot.send_message(chat_id, "ㅤ", reply_markup=allocated_markup)
                 threading.Thread(target=free_poll_otp_thread, args=(chat_id, success_msg.message_id, allocated_numbers, service_name, user_id, active_panel['base_url'], active_panel['api_key'], locals().get('target_range', locals().get('country_node'))), daemon=True).start()
                 
                 success = True
