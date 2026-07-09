@@ -1919,7 +1919,6 @@ def threaded_getnum_retry(chat_id, user_id, service_name, country_node, s_row, l
                 icon = "📸" if "instagram" in service_name.lower() else "📘" if "facebook" in service_name.lower() else "💬" if "whatsapp" in service_name.lower() else "🌐"
                 
                 allocated_markup = types.InlineKeyboardMarkup(row_width=2)
-                allocated_markup.add(types.InlineKeyboardButton(f"{icon} {service_name.capitalize()}", callback_data="ignore", style="success"))
                 
                 for num in allocated_numbers:
                     c_name, c_flag, c_code = get_country_info(num)
@@ -1933,8 +1932,13 @@ def threaded_getnum_retry(chat_id, user_id, service_name, country_node, s_row, l
                 )
                 allocated_markup.add(types.InlineKeyboardButton("❌ Close", callback_data="cancel_step", style="danger"))
                 
-                # Invisible text hack for UI
-                success_msg = bot.send_message(chat_id, "ㅤ", reply_markup=allocated_markup)
+                msg_text = (
+                    f"╭━━━━━━━━━━━━━━╮\n"
+                    f" {icon} <b>{service_name.upper()}</b>\n"
+                    f" ⏳ <i>Waiting for OTP...</i>\n"
+                    f"╰━━━━━━━━━━━━━━╯"
+                )
+                success_msg = bot.send_message(chat_id, msg_text, reply_markup=allocated_markup, parse_mode="HTML")
                 threading.Thread(target=free_poll_otp_thread, args=(chat_id, success_msg.message_id, allocated_numbers, service_name, user_id, active_panel['base_url'], active_panel['api_key'], locals().get('target_range', locals().get('country_node'))), daemon=True).start()
                 
                 success = True
@@ -2136,7 +2140,6 @@ def free_poll_otp_thread(chat_id, message_id, allocated_numbers, service_name, u
     def update_ui():
         icon = "📸" if "instagram" in service_name.lower() else "📘" if "facebook" in service_name.lower() else "💬" if "whatsapp" in service_name.lower() else "🌐"
         markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(types.InlineKeyboardButton(f"{icon} {service_name.capitalize()}", callback_data="ignore", style="success"))
         
         for num in allocated_numbers:
             state = num_states[num]
@@ -2157,7 +2160,13 @@ def free_poll_otp_thread(chat_id, message_id, allocated_numbers, service_name, u
             types.InlineKeyboardButton("👁️ OTP Group", url=otp_link, style="primary")
         )
         markup.add(types.InlineKeyboardButton("❌ Close", callback_data="cancel_step", style="danger"))
-        try: bot.edit_message_reply_markup(chat_id, message_id, reply_markup=markup)
+        msg_text = (
+            f"╭━━━━━━━━━━━━━━╮\n"
+            f" {icon} <b>{service_name.upper()}</b>\n"
+            f" ⏳ <i>OTP Processing...</i>\n"
+            f"╰━━━━━━━━━━━━━━╯"
+        )
+        try: bot.edit_message_text(msg_text, chat_id, message_id, reply_markup=markup, parse_mode="HTML")
         except: pass
 
     while time.time() - start_time < 450:
@@ -2229,6 +2238,13 @@ def free_poll_otp_thread(chat_id, message_id, allocated_numbers, service_name, u
                             otp_group_id = get_config("otp_group_id", str(FORWARD_GROUP_ID))
                             try: bot.send_message(int(otp_group_id), group_msg, reply_markup=group_markup, parse_mode="HTML")
                             except Exception as group_err: logger.error(f"Failed to forward to group: {group_err}")
+                            
+                            try:
+                                notify_msg = f"✅ <b>OTP RECEIVED SUCCESSFULLY</b>\n📞 <code>{num}</code>\n💰 <b>Earned:</b> <code>+{reward_amt:.4f} ৳</code>"
+                                notify_markup = types.InlineKeyboardMarkup()
+                                notify_markup.add(types.InlineKeyboardButton(f"📋 CODE: {otp_code}", copy_text=types.CopyTextButton(text=otp_code), style="success"))
+                                bot.send_message(int(user_id), notify_msg, reply_markup=notify_markup, parse_mode="HTML")
+                            except Exception as e: logger.error(f"Failed to notify user: {e}")
                             
                             num_states[num]["status"] = "success"
                             num_states[num]["otp_code"] = otp_code
