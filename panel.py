@@ -25,10 +25,10 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "8953778024:AAGHEO5lQrcn9wFjzO-TISJLZltq
 PRIMARY_ADMIN_ID = int(os.environ.get("PRIMARY_ADMIN_ID", "8375006707"))
 FORWARD_GROUP_ID = int(os.environ.get("FORWARD_GROUP_ID", "-1003959588492"))
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "sm_otpnumberbot")
-FORCE_CHANNEL = os.environ.get("FORCE_CHANNEL", "@sm_otpnumber")
-FORCE_CHANNEL_LINK = os.environ.get("FORCE_CHANNEL_LINK", "https://t.me/sm_otpnumber")
-FORCE_CHANNEL_2 = os.environ.get("FORCE_CHANNEL_2", "@sm_otpnumber")
-FORCE_CHANNEL_LINK_2 = os.environ.get("FORCE_CHANNEL_LINK_2", "https://t.me/sm_otpnumber")
+FORCE_CHANNEL = os.environ.get("FORCE_CHANNEL", "@ns_method_officials_15")
+FORCE_CHANNEL_LINK = os.environ.get("FORCE_CHANNEL_LINK", "https://t.me/ns_method_officials_15")
+FORCE_CHANNEL_2 = os.environ.get("FORCE_CHANNEL_2", "@sm_otp_group")
+FORCE_CHANNEL_LINK_2 = os.environ.get("FORCE_CHANNEL_LINK_2", "https://t.me/sm_otp_group")
 
 # ZENEX_BASE_URL removed, dynamic panel logic used
 DB_FILE = "bot_database.db"
