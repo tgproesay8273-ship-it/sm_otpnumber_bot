@@ -1882,47 +1882,60 @@ def threaded_getnum_retry(chat_id, user_id, service_name, country_node, s_row, l
     final_err_msg = ""
     final_err_type = "API says"
     
+    allocated_numbers = []
+    
     while time.time() - start_time < max_duration:
         try:
             with api_request_lock:
+                # First request
                 response_raw = http_session.post(api_url, json=payload, headers=get_api_headers(active_panel['api_key']), timeout=12)
                 response = response_raw.json()
+                
+                # Try second request if first succeeds
+                response_raw_2 = None
+                response_2 = {}
+                if response_raw.status_code == 200 and response.get("meta", {}).get("status") in ["success", "ok"]:
+                    try:
+                        response_raw_2 = http_session.post(api_url, json=payload, headers=get_api_headers(active_panel['api_key']), timeout=12)
+                        response_2 = response_raw_2.json()
+                    except: pass
                 
             if response_raw.status_code == 200 and response.get("meta", {}).get("status") in ["success", "ok"]:
                 if not is_admin(user_id):
                     user_cooldowns[user_id] = time.time()
                     
-                number_data = response.get("data", {})
-                allocated_number = number_data.get("number") or number_data.get("full_number")
+                num1 = response.get("data", {}).get("number") or response.get("data", {}).get("full_number")
+                if num1: allocated_numbers.append(str(num1))
+                
+                if response_raw_2 and response_raw_2.status_code == 200 and response_2.get("meta", {}).get("status") in ["success", "ok"]:
+                    num2 = response_2.get("data", {}).get("number") or response_2.get("data", {}).get("full_number")
+                    if num2 and str(num2) != str(num1):
+                        allocated_numbers.append(str(num2))
                 
                 try: bot.delete_message(chat_id, loading_msg_id)
                 except: pass
                 
                 import urllib.parse
-                country_name_disp, country_flag, country_code = get_country_info(allocated_number)
-                
                 icon = "📸" if "instagram" in service_name.lower() else "📘" if "facebook" in service_name.lower() else "💬" if "whatsapp" in service_name.lower() else "🌐"
-                allocated_ui = (
-                    "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
-                    f" {icon} *{service_name.upper()}* {country_flag} {country_name_disp}\n"
-                    " ⏳ _Waiting for OTP..._ 🔄\n"
-                    " ⏰ *Expire (15 min)*\n"
-                    " ⚠️ _Do not close this menu._\n"
-                    "╰━━━━━━━━━━━━━━━━━━━━━━╯"
-                )
+                
+                allocated_markup = types.InlineKeyboardMarkup(row_width=2)
+                allocated_markup.add(types.InlineKeyboardButton(f"{icon} {service_name.capitalize()}", callback_data="ignore", style="success"))
+                
+                for num in allocated_numbers:
+                    c_name, c_flag, c_code = get_country_info(num)
+                    disp_num = num if str(num).startswith('+') else '+' + str(num)
+                    allocated_markup.add(types.InlineKeyboardButton(f"{c_flag} 📋 {disp_num}", copy_text=types.CopyTextButton(text=str(num)), style="primary"))
                 
                 otp_link = get_config("otp_group_link", "https://t.me/FreeOtpMaster")
-                allocated_markup = types.InlineKeyboardMarkup(row_width=2)
-                allocated_markup.add(types.InlineKeyboardButton(f"📋 {allocated_number if str(allocated_number).startswith('+') else '+' + str(allocated_number)}", copy_text=types.CopyTextButton(text=allocated_number), style="success"))
                 allocated_markup.add(
                     types.InlineKeyboardButton("🔄 Change Target", callback_data=f"srv_{service_name}", style="danger"),
-                    types.InlineKeyboardButton("↗️ View OTP Group", url=otp_link, style="primary")
+                    types.InlineKeyboardButton("👁️ OTP Group", url=otp_link, style="primary")
                 )
-                allocated_markup.add(types.InlineKeyboardButton("🔙 Back to Main", callback_data="back_to_services", style="danger"))
                 allocated_markup.add(types.InlineKeyboardButton("❌ Close", callback_data="cancel_step", style="danger"))
                 
-                success_msg = bot.send_message(chat_id, allocated_ui, reply_markup=allocated_markup)
-                threading.Thread(target=free_poll_otp_thread, args=(chat_id, success_msg.message_id, allocated_number, service_name, user_id, active_panel['base_url'], active_panel['api_key'], locals().get('target_range', locals().get('country_node'))), daemon=True).start()
+                # Invisible text hack for UI
+                success_msg = bot.send_message(chat_id, "\u200b", reply_markup=allocated_markup)
+                threading.Thread(target=free_poll_otp_thread, args=(chat_id, success_msg.message_id, allocated_numbers, service_name, user_id, active_panel['base_url'], active_panel['api_key'], locals().get('target_range', locals().get('country_node'))), daemon=True).start()
                 
                 success = True
                 break
@@ -1957,15 +1970,14 @@ def threaded_getnum_retry(chat_id, user_id, service_name, country_node, s_row, l
             if get_config("admin_notifications", "1") == "1":
                 err_notice = f"⚠️ *API/STOCK ALERT*\n👤 User: `{user_id}`\n⚡ Service: `{service_name}`\n🌍 Country: `{country_node}`\n💬 Error: `{final_err_msg}`"
                 admin_ids = set([r['user_id'] for r in db.admins.find()])
-                admin_ids.add(get_primary_admin())
+                try: admin_ids.add(get_primary_admin())
+                except: pass
                 for admin_uid in admin_ids:
                     try: bot.send_message(int(admin_uid), err_notice)
                     except: pass
         else:
             try: bot.edit_message_text(f"🔴 *{final_err_type}:* `{final_err_msg}`", chat_id, loading_msg_id)
             except: pass
-
-
 @bot.callback_query_handler(func=lambda call: call.data.startswith("srv_") or call.data == "back_to_services")
 def handle_service_selection(call):
     try: bot.answer_callback_query(call.id)
@@ -2112,108 +2124,135 @@ def handle_country_and_purchase(call):
 
     else:
         threading.Thread(target=threaded_getnum_retry, args=(chat_id, user_id, service_name, country_node, s_row, loading_msg.message_id), daemon=True).start()
-def free_poll_otp_thread(chat_id, message_id, allocated_number, service_name, user_id, base_url, api_key, target_range=None):
+def free_poll_otp_thread(chat_id, message_id, allocated_numbers, service_name, user_id, base_url, api_key, target_range=None):
     start_time = time.time()
     check_url = f"{base_url}/success-otp" if "@public" in base_url else f"{base_url}/v1/numsuccess/info"
-    country_name, country_flag, country_code = get_country_info(allocated_number)
+    
+    # Track state for each number
+    num_states = {}
+    for num in allocated_numbers:
+        num_states[num] = {"status": "waiting", "otp_code": None}
+
+    def update_ui():
+        icon = "📸" if "instagram" in service_name.lower() else "📘" if "facebook" in service_name.lower() else "💬" if "whatsapp" in service_name.lower() else "🌐"
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(types.InlineKeyboardButton(f"{icon} {service_name.capitalize()}", callback_data="ignore", style="success"))
+        
+        for num in allocated_numbers:
+            state = num_states[num]
+            c_name, c_flag, c_code = get_country_info(num)
+            disp_num = num if str(num).startswith('+') else '+' + str(num)
+            
+            if state["status"] == "waiting":
+                markup.add(types.InlineKeyboardButton(f"{c_flag} 📋 {disp_num}", copy_text=types.CopyTextButton(text=str(num)), style="primary"))
+            elif state["status"] == "success":
+                otp_c = state["otp_code"]
+                markup.add(types.InlineKeyboardButton(f"✔️ OTP: {otp_c} (Copy)", copy_text=types.CopyTextButton(text=otp_c), style="success"))
+            elif state["status"] == "expired":
+                markup.add(types.InlineKeyboardButton(f"❌ {disp_num} Expired", callback_data="ignore", style="danger"))
+        
+        otp_link = get_config("otp_group_link", "https://t.me/FreeOtpMaster")
+        markup.add(
+            types.InlineKeyboardButton("🔄 Change Target", callback_data=f"srv_{service_name}", style="danger"),
+            types.InlineKeyboardButton("👁️ OTP Group", url=otp_link, style="primary")
+        )
+        markup.add(types.InlineKeyboardButton("❌ Close", callback_data="cancel_step", style="danger"))
+        try: bot.edit_message_reply_markup(chat_id, message_id, reply_markup=markup)
+        except: pass
 
     while time.time() - start_time < 450:
+        all_done = True
+        for num, state in num_states.items():
+            if state["status"] == "waiting":
+                all_done = False
+        if all_done:
+            break
+            
         try:
             res_raw = http_session.get(check_url, headers=get_api_headers(api_key), timeout=8)
-            with open("poll_debug.log", "a", encoding="utf-8") as f:
-                f.write(f"\n[{time.time()}] {check_url} | num: {allocated_number} | resp: {res_raw.text}")
-                
             try:
                 res = res_raw.json()
             except ValueError:
                 time.sleep(2)
                 continue
             
+            ui_needs_update = False
+            
             if res_raw.status_code == 200 and isinstance(res, dict) and res.get("meta", {}).get("status") in ["success", "ok"]:
                 otp_list = res.get("data", {}).get("otps", [])
                 
                 for item in otp_list:
                     num_val = str(item.get("number") or item.get("phone") or item.get("phone_number") or "")
-                    if num_val in str(allocated_number) or str(allocated_number) in num_val:
-                        raw_sms = str(item.get("otp") or item.get("sms") or item.get("message") or "")
-                        otp_digits = re.search(r'\b\d{4,8}\b', raw_sms)
-                        otp_code = otp_digits.group(0) if otp_digits else "".join(re.findall(r'\d+', raw_sms))[:6]
-                        
-                        if db.otps_history.find_one({"number": str(allocated_number), "otp_code": otp_code}):
-                            continue
-                        
-                        reward_amt = float(get_config("reward_amount", 0.0002))
-                        commission = float(get_config("ref_commission", 0.01))
-                        
-                        db.users.update_one({"user_id": user_id}, {"$inc": {"balance": reward_amt, "completed_otps": 1}})
-                        u_data = db.users.find_one({"user_id": user_id})
-                        
-                        tot_otps = int(get_config("total_otps_processed", 0)) + 1
-                        set_config("total_otps_processed", str(tot_otps))
-                        
-                        panel_doc = db.panels.find_one({"base_url": base_url})
-                        pname = panel_doc["panel_name"] if panel_doc else "Unknown"
-                        db.otps_history.insert_one({"user_id": user_id, "service": service_name, "timestamp": time.time(), "date": time.strftime('%Y-%m-%d'), "panel": pname, "number": str(allocated_number), "otp_code": otp_code})
-                        
-                        referred_by = u_data.get('referred_by') if u_data else None
-                        if referred_by:
-                            db.users.update_one({"user_id": referred_by}, {"$inc": {"balance": commission}})
-                            db.ref_history.insert_one({"referrer_id": referred_by, "amount": commission, "timestamp": time.time()})
+                    
+                    for num in allocated_numbers:
+                        if num_states[num]["status"] == "waiting" and (num_val in str(num) or str(num) in num_val):
+                            raw_sms = str(item.get("otp") or item.get("sms") or item.get("message") or "")
+                            otp_digits = re.search(r'\b\d{4,8}\b', raw_sms)
+                            otp_code = otp_digits.group(0) if otp_digits else "".join(re.findall(r'\d+', raw_sms))[:6]
                             
-                        current_balance = u_data['balance']
-                        user_otp_msg = (
-                            f"✅ *OTP RECEIVED SUCCESSFULLY*\n"
-                            f"━━━━━━━━━━━━━━━━━━━\n"
-                            f"📱 *Service:* `{service_name.upper()}`\n"
-                            f"🌍 *Country:* {country_flag} `{country_name}`\n"
-                            f"📞 *Number:* `{allocated_number}`\n"
-                            f"💰 *Earned:* `+{reward_amt:.4f} ৳`\n"
-                            f"━━━━━━━━━━━━━━━━━━━\n"
-                            f"👇 _Click the button below to copy OTP_"
-                        )
-                        
-                        otp_markup = types.InlineKeyboardMarkup(row_width=2)
-                        otp_markup.add(
-                            types.InlineKeyboardButton(f"📋 {otp_code}", copy_text=types.CopyTextButton(text=otp_code, style="success"))
-                        )
-                        otp_group_link = get_config("otp_group_link", "https://t.me/FreeOtpMaster")
-                        otp_markup.add(
-                            types.InlineKeyboardButton("🔄 Get Another Number", callback_data=f"sel_{service_name}_RNG_{target_range}" if target_range and target_range[0].isdigit() and len(f"sel_{service_name}_RNG_{target_range}") <= 64 else f"sel_{service_name}_{target_range}" if target_range and len(f"sel_{service_name}_{target_range}") <= 64 else f"sel_{service_name}_AUTO-BEST", style="primary"),
-                            types.InlineKeyboardButton("👁️ OTP GROUP", url=otp_group_link, style="primary")
-                        )
-                        
-                        try: bot.edit_message_text(user_otp_msg, chat_id, message_id, reply_markup=otp_markup, parse_mode="Markdown")
-                        except: bot.send_message(int(user_id), user_otp_msg, reply_markup=otp_markup, parse_mode="Markdown")
-                        
-                        icon = "📸" if "instagram" in service_name.lower() else "📘" if "facebook" in service_name.lower() else "💬"
-                        group_msg = (
-                            f"🌟 *NEW OTP INTERCEPTED* 🌟\n"
-                            f"━━━━━━━━━━━━━━━━━━━\n"
-                            f"🌍 *Region:* {country_flag} {country_name}\n"
-                            f"📱 *Service:* {icon} {service_name.upper()}\n"
-                            f"📞 *Number:* `{allocated_number}`\n"
-                            f"━━━━━━━━━━━━━━━━━━━\n"
-                            f"💬 *SMS:*\n"
-                            f"`{safe_sms}`\n"
-                            f"━━━━━━━━━━━━━━━━━━━\n"
-                            f"⚡ *Secured by FreeOtpMaster* ⚡"
-                        )
-                        
-                        markup = types.InlineKeyboardMarkup(row_width=2)
-                        markup.add(types.InlineKeyboardButton(text=f"📋 CODE: {otp_code}", copy_text=types.CopyTextButton(text=otp_code), style="success"))
-                        markup.add(types.InlineKeyboardButton(text="📞 VIEW BOT", url=f"https://t.me/{BOT_USERNAME}", style="success"))
-                        
-                        otp_group_id = get_config("otp_group_id", str(FORWARD_GROUP_ID))
-                        try: bot.send_message(int(otp_group_id), group_msg, reply_markup=markup, parse_mode="Markdown")
-                        except: pass
-                        return
+                            if db.otps_history.find_one({"number": str(num), "otp_code": otp_code}):
+                                continue
+                            
+                            # Reward logic
+                            reward_amt = float(get_config("reward_amount", 0.0002))
+                            commission = float(get_config("ref_commission", 0.01))
+                            
+                            db.users.update_one({"user_id": user_id}, {"$inc": {"balance": reward_amt, "completed_otps": 1}})
+                            u_data = db.users.find_one({"user_id": user_id})
+                            
+                            tot_otps = int(get_config("total_otps_processed", 0)) + 1
+                            set_config("total_otps_processed", str(tot_otps))
+                            
+                            panel_doc = db.panels.find_one({"base_url": base_url})
+                            pname = panel_doc["panel_name"] if panel_doc else "Unknown"
+                            db.otps_history.insert_one({"user_id": user_id, "service": service_name, "timestamp": time.time(), "date": time.strftime('%Y-%m-%d'), "panel": pname, "number": str(num), "otp_code": otp_code})
+                            
+                            referred_by = u_data.get('referred_by') if u_data else None
+                            if referred_by:
+                                db.users.update_one({"user_id": referred_by}, {"$inc": {"balance": commission}})
+                                db.ref_history.insert_one({"referrer_id": referred_by, "amount": commission, "timestamp": time.time()})
+                                
+                            # Send to OTP Group
+                            c_name, c_flag, c_code = get_country_info(num)
+                            icon = "📸" if "instagram" in service_name.lower() else "📘" if "facebook" in service_name.lower() else "💬"
+                            group_msg = (
+                                f"🌟 *NEW OTP INTERCEPTED* 🌟\n"
+                                f"━━━━━━━━━━━━━━━━━━━\n"
+                                f"🌍 *Region:* {c_flag} {c_name}\n"
+                                f"📱 *Service:* {icon} {service_name.upper()}\n"
+                                f"📞 *Number:* `{num}`\n"
+                                f"━━━━━━━━━━━━━━━━━━━\n"
+                                f"💬 *OTP:* `{otp_code}`\n"
+                                f"━━━━━━━━━━━━━━━━━━━\n"
+                                f"⚡ *Secured by FreeOtpMaster* ⚡"
+                            )
+                            group_markup = types.InlineKeyboardMarkup(row_width=2)
+                            group_markup.add(types.InlineKeyboardButton(text=f"📋 CODE: {otp_code}", copy_text=types.CopyTextButton(text=otp_code), style="success"))
+                            
+                            otp_group_id = get_config("otp_group_id", str(FORWARD_GROUP_ID))
+                            try: bot.send_message(int(otp_group_id), group_msg, reply_markup=group_markup, parse_mode="Markdown")
+                            except: pass
+                            
+                            num_states[num]["status"] = "success"
+                            num_states[num]["otp_code"] = otp_code
+                            ui_needs_update = True
+                            
+            if ui_needs_update:
+                update_ui()
+                
         except Exception as poll_err:
             logger.error(f"OTP Poll Error: {poll_err}")
         time.sleep(2)  
     
-    try: bot.edit_message_text("🔴 *Session Timeout!* Node failed.", chat_id, message_id)
-    except: pass
-
+    # Mark remaining as expired
+    ui_needs_update = False
+    for num, state in num_states.items():
+        if state["status"] == "waiting":
+            state["status"] = "expired"
+            ui_needs_update = True
+            
+    if ui_needs_update:
+        update_ui()
 app = Flask(__name__)
 @app.route('/')
 def home():
