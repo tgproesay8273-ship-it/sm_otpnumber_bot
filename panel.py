@@ -315,8 +315,8 @@ def check_join(user_id):
         logger.error(f"Force Join Check Error: {e}")
         print(f"Force Join Check Error for user {user_id}: {e}")
         # If the bot is not admin in the channel, it throws an exception.
-        # Returning True to not block the user.
-        return True
+        # Returning False to strictly block the user until configured properly.
+        return False
 
 def force_join_keyboard():
     markup = types.InlineKeyboardMarkup(row_width=1)
@@ -646,6 +646,10 @@ def admin_panel(message):
     msg = f"👑 *Main Control Console V8.0*\n\n_Manage networks, configurations, and user operations seamlessly._\n\n👥 *Total Users:* `{total_users}`\n⚡ *Active Panels:* `{pnames}`"
     bot.send_message(message.chat.id, msg, reply_markup=admin_panel_keyboard(message.from_user.id))
 
+
+@bot.callback_query_handler(func=lambda call: call.data == "support_not_set")
+def callback_support_not_set(call):
+    bot.answer_callback_query(call.id, "Support link is not set. Please update from Admin Panel.", show_alert=True)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("2fa_"))
 def callback_2fa_handler(call):
@@ -1398,10 +1402,15 @@ def handle_text_buttons(message):
         support_text = "🤝 *OFFICIAL COMMUNICATIONS SUPPORT*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\nযে কোনো ধরনের সহযোগিতা বা সমস্যার সমাধানের জন্য আমাদের সাপোর্ট টিমের সাথে যোগাযোগ করুন। অথবা কাস্টম বটের জন্য ডেভেলপারের সাথে কথা বলতে পারেন।"
         
         markup = types.InlineKeyboardMarkup(row_width=2)
+        support_url = get_config("support_link", "")
         markup.add(
-            types.InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/developer1100", style="primary"),
-            types.InlineKeyboardButton("🎧 Support", url=get_config("support_link", "https://t.me/SR_SOCIAL_AGENCY_ADMIN"), style="primary")
+            types.InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/developer1100", style="primary")
         )
+        if support_url:
+            markup.add(types.InlineKeyboardButton("🎧 Support", url=support_url, style="primary"))
+        else:
+            markup.add(types.InlineKeyboardButton("🎧 Support (Not Set)", callback_data="support_not_set", style="primary"))
+        
         bot.send_message(message.chat.id, support_text, reply_markup=markup, disable_web_page_preview=True)
 
     elif "GET 2FA" in text.upper():
