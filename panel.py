@@ -1268,7 +1268,7 @@ def send_welcome(message):
         bot.send_message(message.chat.id, "🔴 *Access Revoked!* You must authenticate membership.", reply_markup=force_join_keyboard())
         return
         
-    welcome_text = f"👋 হ্যালো {full_name}, Free OTP Master বটে আপনাকে স্বাগতম!"
+    welcome_text = f"👋 হ্যালো {full_name}, MetaX Number বটে আপনাকে স্বাগতম!"
     bot.send_message(message.chat.id, welcome_text, reply_markup=main_menu_keyboard(user_id))
 
 @bot.callback_query_handler(func=lambda call: call.data == "check_verified")
@@ -1925,7 +1925,7 @@ def threaded_getnum_retry(chat_id, user_id, service_name, country_node, s_row, l
                     disp_num = num if str(num).startswith('+') else '+' + str(num)
                     allocated_markup.add(types.InlineKeyboardButton(f"{c_flag} 📋 {disp_num}", copy_text=types.CopyTextButton(text=str(num)), style="primary"))
                 
-                otp_link = get_config("otp_group_link", "https://t.me/FreeOtpMaster")
+                otp_link = get_config("otp_group_link", "https://t.me/sm_otp_group")
                 allocated_markup.add(
                     types.InlineKeyboardButton("🔄 Change Target", callback_data=f"srv_{service_name}", style="danger"),
                     types.InlineKeyboardButton("👁️ OTP Group", url=otp_link, style="primary")
@@ -2113,7 +2113,7 @@ def handle_country_and_purchase(call):
             "╰━━━━━━━━━━━━━━━━━━━━━━╯"
         )
         
-        otp_link = get_config("otp_group_link", "https://t.me/FreeOtpMaster")
+        otp_link = get_config("otp_group_link", "https://t.me/sm_otp_group")
         allocated_markup = types.InlineKeyboardMarkup(row_width=2)
         allocated_markup.add(types.InlineKeyboardButton(f"📋 {allocated_number if str(allocated_number).startswith('+') else '+' + str(allocated_number)}", copy_text=types.CopyTextButton(text=allocated_number), style="success"))
         allocated_markup.add(
@@ -2154,7 +2154,7 @@ def free_poll_otp_thread(chat_id, message_id, allocated_numbers, service_name, u
             elif state["status"] == "expired":
                 markup.add(types.InlineKeyboardButton(f"❌ {disp_num} Expired", callback_data="ignore", style="danger"))
         
-        otp_link = get_config("otp_group_link", "https://t.me/FreeOtpMaster")
+        otp_link = get_config("otp_group_link", "https://t.me/sm_otp_group")
         markup.add(
             types.InlineKeyboardButton("🔄 Change Target", callback_data=f"srv_{service_name}", style="danger"),
             types.InlineKeyboardButton("👁️ OTP Group", url=otp_link, style="primary")
@@ -2362,7 +2362,7 @@ def auto_route_updater_thread():
                     if old_top_range and old_top_range != new_top_range and new_hits >= 20:
                         c_part = new_top.get('country_name', '').split(" | ")[0]
                         msg = f"🔥 *HOT ROUTE ALERT*\n\n🌍 *সার্ভিস:* `{s}`\n🚀 বর্তমানে *{c_part}* এ সবচেয়ে ভালো OTP দিচ্ছে! সবাই এই নাম্বারে কাজ করুন।"
-                        try: bot.send_message("@FreeOtpMaster", msg, parse_mode="Markdown")
+                        try: bot.send_message("@sm_otp_group", msg, parse_mode="Markdown")
                         except: pass
                         previous_tops[s] = new_top_range
                     elif not old_top_range:
