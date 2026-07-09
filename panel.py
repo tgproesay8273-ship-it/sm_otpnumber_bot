@@ -193,8 +193,8 @@ def init_db():
         if not db.config.find_one({"key": k}):
             db.config.insert_one({"key": k, "value": v})
             
-    if not db.admins.find_one({"user_id": str(PRIMARY_ADMIN_ID)}):
-        db.admins.insert_one({"user_id": str(PRIMARY_ADMIN_ID), "permissions": "[]"})
+    if not db.admins.find_one({"user_id": get_primary_admin()}):
+        db.admins.insert_one({"user_id": get_primary_admin(), "permissions": "[]"})
         
     if db.services.count_documents({}) == 0:
         db.services.insert_many([
@@ -218,6 +218,9 @@ def init_db():
 
 init_db()
 
+def get_primary_admin():
+    return str(get_config("PRIMARY_ADMIN_ID", PRIMARY_ADMIN_ID))
+
 def get_config(key, default=None):
     row = db.config.find_one({"key": key})
     return row["value"] if row else default
@@ -226,11 +229,11 @@ def set_config(key, value):
     db.config.update_one({"key": key}, {"$set": {"value": str(value)}}, upsert=True)
 
 def is_admin(user_id):
-    if str(user_id) == str(PRIMARY_ADMIN_ID): return True
+    if str(user_id) == get_primary_admin(): return True
     return bool(db.admins.find_one({"user_id": str(user_id)}))
 
 def is_primary_admin(user_id):
-    if str(user_id) == str(PRIMARY_ADMIN_ID): return True
+    if str(user_id) == get_primary_admin(): return True
     row = db.admins.find_one({"user_id": str(user_id)})
     if row and row.get('permissions'):
         try:
@@ -291,7 +294,7 @@ def register_user(user_id, username="User", referred_by=None):
             set_config("last_milestone", str(new_milestone))
             try:
                 msg = f"🎉 *MILESTONE REACHED!* 🎉\n━━━━━━━━━━━━━━━━━━━\nCongratulations! Your bot has successfully reached *{new_milestone}* users!\nKeep up the great work! 🚀"
-                bot.send_message(PRIMARY_ADMIN_ID, msg)
+                bot.send_message(int(get_primary_admin()), msg)
             except: pass
     else:
         update_fields = {"last_active": current_time}
@@ -349,8 +352,8 @@ def main_menu_keyboard(user_id):
     btn_support = types.KeyboardButton("🎧 Support", style="danger")
     
     markup.add(btn_number)
-    markup.add(btn_balance, btn_refer)
-    markup.add(btn_leaderboard, btn_2fa)
+    markup.add(btn_balance, btn_2fa)
+    markup.add(btn_leaderboard, btn_refer)
     markup.add(btn_support)
     
     if is_admin(user_id):
@@ -458,9 +461,12 @@ def admin_panel_keyboard(user_id):
             types.InlineKeyboardButton("💬 Set OTP Forward Group", callback_data="adm_otp_group_id", style="primary"),
             types.InlineKeyboardButton("🎯 Edit Milestones", callback_data="adm_milestone", style="primary"),
             types.InlineKeyboardButton("👮‍♂️ Manage Team", callback_data="adm_manage_admins", style="primary"),
+            types.InlineKeyboardButton("👑 Transfer Ownership", callback_data="adm_transfer_owner", style="danger"),
             types.InlineKeyboardButton("🎛 Manage Panels", callback_data="adm_panels_menu", style="primary"),
             types.InlineKeyboardButton(notif_text, callback_data="adm_toggle_notif", style="primary")
         )
+    else:
+        markup.add(types.InlineKeyboardButton("🚪 Resign from Admin", callback_data="adm_resign", style="danger"))
     markup.add(types.InlineKeyboardButton("❌ Close", callback_data="cancel_step", style="danger"))
     return markup
 
@@ -906,7 +912,7 @@ def handle_admin_callbacks(call):
         admin_list_text = "👮‍♂️ *Current Admin Team:*\n━━━━━━━━━━━━━━━━━━━\n"
         for idx, row in enumerate(admin_rows):
             uid = row['user_id']
-            if str(uid) == str(PRIMARY_ADMIN_ID):
+            if str(uid) == get_primary_admin():
                 admin_list_text += f"▪️ `{uid}` 👑 (Primary)\n"
             else:
                 admin_list_text += f"▪️ `{uid}` 🛡️ (Secondary)\n"
@@ -1070,7 +1076,7 @@ def process_add_admin(message):
 def process_rem_admin(message):
     try:
         uid = str(int(message.text.strip()))
-        if uid == str(PRIMARY_ADMIN_ID):
+        if uid == get_primary_admin():
             bot.send_message(message.chat.id, "❌ Cannot remove Primary Admin.")
             return
         db.admins.delete_one({"user_id": uid})
@@ -1951,7 +1957,7 @@ def threaded_getnum_retry(chat_id, user_id, service_name, country_node, s_row, l
             if get_config("admin_notifications", "1") == "1":
                 err_notice = f"⚠️ *API/STOCK ALERT*\n👤 User: `{user_id}`\n⚡ Service: `{service_name}`\n🌍 Country: `{country_node}`\n💬 Error: `{final_err_msg}`"
                 admin_ids = set([r['user_id'] for r in db.admins.find()])
-                admin_ids.add(str(PRIMARY_ADMIN_ID))
+                admin_ids.add(get_primary_admin())
                 for admin_uid in admin_ids:
                     try: bot.send_message(int(admin_uid), err_notice)
                     except: pass
@@ -2336,3 +2342,36 @@ def process_custom_range_input(message, service_name):
     fake_call = FakeCall(message, f"sel_{service_name}_RANGE-{target_range}")
     handle_country_and_purchase(fake_call)
 
+
+@bot.callback_query_handler(func=lambda call: call.data == "adm_resign")
+def handle_adm_resign(call):
+    user_id = str(call.from_user.id)
+    if is_primary_admin(user_id):
+        bot.answer_callback_query(call.id, "Primary admin cannot resign! Transfer ownership first.", show_alert=True)
+        return
+    db.admins.delete_one({"user_id": user_id})
+    bot.answer_callback_query(call.id, "You have resigned from Admin.", show_alert=True)
+    try: bot.edit_message_text("✅ You are no longer an admin. Access revoked.", call.message.chat.id, call.message.message_id)
+    except: pass
+
+@bot.callback_query_handler(func=lambda call: call.data == "adm_transfer_owner")
+def handle_transfer_owner(call):
+    user_id = str(call.from_user.id)
+    if not is_primary_admin(user_id):
+        bot.answer_callback_query(call.id, "Access Denied", show_alert=True)
+        return
+    bot.answer_callback_query(call.id)
+    msg = bot.send_message(call.message.chat.id, "👑 *Transfer Ownership*\n\nEnter the User ID of the new primary admin.\n\n_Note: You will lose primary admin rights immediately!_", parse_mode="Markdown", reply_markup=cancel_markup())
+    bot.register_next_step_handler(msg, process_transfer_owner)
+
+def process_transfer_owner(message):
+    if message.text == "❌ Cancel": return
+    new_admin_id = message.text.strip()
+    if not new_admin_id.isdigit():
+        bot.send_message(message.chat.id, "❌ Invalid User ID!")
+        return
+    set_config("PRIMARY_ADMIN_ID", new_admin_id)
+    db.admins.update_one({"user_id": new_admin_id}, {"$set": {"permissions": '["fullaccess"]'}}, upsert=True)
+    bot.send_message(message.chat.id, f"✅ Ownership transferred successfully to `{new_admin_id}`!", parse_mode="Markdown")
+    try: bot.send_message(int(new_admin_id), "👑 You have been made the Primary Admin of the bot!")
+    except: pass
