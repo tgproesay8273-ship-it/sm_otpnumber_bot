@@ -2133,6 +2133,9 @@ def free_poll_otp_thread(chat_id, message_id, allocated_number, service_name, us
                         otp_digits = re.search(r'\b\d{4,8}\b', raw_sms)
                         otp_code = otp_digits.group(0) if otp_digits else "".join(re.findall(r'\d+', raw_sms))[:6]
                         
+                        if db.otps_history.find_one({"number": str(allocated_number), "otp_code": otp_code}):
+                            continue
+                        
                         reward_amt = float(get_config("reward_amount", 0.0002))
                         commission = float(get_config("ref_commission", 0.01))
                         
@@ -2144,7 +2147,7 @@ def free_poll_otp_thread(chat_id, message_id, allocated_number, service_name, us
                         
                         panel_doc = db.panels.find_one({"base_url": base_url})
                         pname = panel_doc["panel_name"] if panel_doc else "Unknown"
-                        db.otps_history.insert_one({"user_id": user_id, "service": service_name, "timestamp": time.time(), "date": time.strftime('%Y-%m-%d'), "panel": pname})
+                        db.otps_history.insert_one({"user_id": user_id, "service": service_name, "timestamp": time.time(), "date": time.strftime('%Y-%m-%d'), "panel": pname, "number": str(allocated_number), "otp_code": otp_code})
                         
                         referred_by = u_data.get('referred_by') if u_data else None
                         if referred_by:
