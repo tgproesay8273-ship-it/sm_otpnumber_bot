@@ -634,9 +634,7 @@ def callback_2fa_handler(call):
     chat_id = call.message.chat.id
     
     if action == "2fa_new":
-        msg = bot.send_message(chat_id, "?? *2FA Code Generator*
-
-Please send me your 2FA Key (Base32 format):", parse_mode="Markdown", reply_markup=reply_cancel_markup())
+        msg = bot.send_message(chat_id, "?? *2FA Code Generator*\n\nPlease send me your 2FA Key (Base32 format):", parse_mode="Markdown", reply_markup=reply_cancel_markup())
         bot.register_next_step_handler(msg, process_2fa_key)
         try: bot.answer_callback_query(call.id)
         except: pass
@@ -650,12 +648,7 @@ Please send me your 2FA Key (Base32 format):", parse_mode="Markdown", reply_mark
             code = totp.now()
             remaining = 30 - (int(time.time()) % 30)
             
-            reply_text = f"?? *2FA Code Generator*
-
-?? *Key:* {key}
-
-?? *Code:* {code}
-? *Expires in:* {remaining}s"
+            reply_text = f"?? *2FA Code Generator*\n\n?? *Key:* {key}\n\n?? *Code:* {code}\n? *Expires in:* {remaining}s"
             markup = types.InlineKeyboardMarkup(row_width=2)
             btn_refresh = types.InlineKeyboardButton("?? Refresh Code", callback_data=f"2fa_refresh:{key}", style="success")
             btn_new = types.InlineKeyboardButton("? New", callback_data="2fa_new", style="primary")
@@ -1747,9 +1740,7 @@ def handle_text_buttons(message):
         bot.send_message(message.chat.id, support_text, reply_markup=markup, disable_web_page_preview=True)
 
     elif "GET 2FA" in text.upper():
-        msg = bot.send_message(message.chat.id, "?? *2FA Code Generator*
-
-Please send me your 2FA Key (Base32 format):", parse_mode="Markdown", reply_markup=reply_cancel_markup())
+        msg = bot.send_message(message.chat.id, "?? *2FA Code Generator*\n\nPlease send me your 2FA Key (Base32 format):", parse_mode="Markdown", reply_markup=reply_cancel_markup())
         bot.register_next_step_handler(msg, process_2fa_key)
 
 def process_2fa_key(message):
@@ -1765,12 +1756,7 @@ def process_2fa_key(message):
         code = totp.now()
         remaining = 30 - (int(time.time()) % 30)
         
-        reply_text = f"?? *2FA Code Generator*
-
-?? *Key:* {key}
-
-?? *Code:* {code}
-? *Expires in:* {remaining}s"
+        reply_text = f"?? *2FA Code Generator*\n\n?? *Key:* {key}\n\n?? *Code:* {code}\n? *Expires in:* {remaining}s"
         markup = types.InlineKeyboardMarkup(row_width=2)
         btn_refresh = types.InlineKeyboardButton("?? Refresh Code", callback_data=f"2fa_refresh:{key}", style="success")
         btn_new = types.InlineKeyboardButton("? New", callback_data="2fa_new", style="primary")
