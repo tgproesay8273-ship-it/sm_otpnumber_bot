@@ -1267,8 +1267,6 @@ def send_welcome(message):
 
 @bot.callback_query_handler(func=lambda call: call.data == "check_verified")
 def verify_user_callback(call):
-    try: bot.answer_callback_query(call.id)
-    except: pass
     user_id = call.from_user.id
     if check_join(user_id):
         bot.answer_callback_query(call.id, "✅ Node Verified!", show_alert=True)
