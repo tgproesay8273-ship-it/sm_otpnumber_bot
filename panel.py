@@ -24,7 +24,7 @@ from flask import Flask
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8953778024:AAGHEO5lQrcn9wFjzO-TISJLZltqwGGvS9s")
 PRIMARY_ADMIN_ID = int(os.environ.get("PRIMARY_ADMIN_ID", "8375006707"))
 FORWARD_GROUP_ID = int(os.environ.get("FORWARD_GROUP_ID", "-1003959588492"))
-BOT_USERNAME = os.environ.get("BOT_USERNAME", "sm_otpnumberbot")
+BOT_USERNAME = os.environ.get("BOT_USERNAME", "sm_otpnumber_bot")
 FORCE_CHANNEL = os.environ.get("FORCE_CHANNEL", "@ns_method_officials_15")
 FORCE_CHANNEL_LINK = os.environ.get("FORCE_CHANNEL_LINK", "https://t.me/ns_method_officials_15")
 FORCE_CHANNEL_2 = os.environ.get("FORCE_CHANNEL_2", "@sm_otp_group")
@@ -2215,23 +2215,20 @@ def free_poll_otp_thread(chat_id, message_id, allocated_numbers, service_name, u
                             # Send to OTP Group
                             c_name, c_flag, c_code = get_country_info(num)
                             icon = "📸" if "instagram" in service_name.lower() else "📘" if "facebook" in service_name.lower() else "💬"
+                            masked_num = "*" * 8 + str(num)[-4:]
                             group_msg = (
-                                f"🌟 *NEW OTP INTERCEPTED* 🌟\n"
-                                f"━━━━━━━━━━━━━━━━━━━\n"
-                                f"🌍 *Region:* {c_flag} {c_name}\n"
-                                f"📱 *Service:* {icon} {service_name.upper()}\n"
-                                f"📞 *Number:* `{num}`\n"
-                                f"━━━━━━━━━━━━━━━━━━━\n"
-                                f"💬 *OTP:* `{otp_code}`\n"
-                                f"━━━━━━━━━━━━━━━━━━━\n"
-                                f"⚡ *Secured by FreeOtpMaster* ⚡"
+                                f"╭━━━━━━━━━━━━━━╮\n"
+                                f"{icon} <b>{service_name.upper()}</b> {c_flag} {c_name}\n"
+                                f"📞 <code>{masked_num}</code>\n"
+                                f"╰━━━━━━━━━━━━━━╯"
                             )
                             group_markup = types.InlineKeyboardMarkup(row_width=2)
                             group_markup.add(types.InlineKeyboardButton(text=f"📋 CODE: {otp_code}", copy_text=types.CopyTextButton(text=otp_code), style="success"))
+                            group_markup.add(types.InlineKeyboardButton(text="📞 VIEW BOT", url=f"https://t.me/{BOT_USERNAME}", style="success"))
                             
                             otp_group_id = get_config("otp_group_id", str(FORWARD_GROUP_ID))
-                            try: bot.send_message(int(otp_group_id), group_msg, reply_markup=group_markup, parse_mode="Markdown")
-                            except: pass
+                            try: bot.send_message(int(otp_group_id), group_msg, reply_markup=group_markup, parse_mode="HTML")
+                            except Exception as group_err: logger.error(f"Failed to forward to group: {group_err}")
                             
                             num_states[num]["status"] = "success"
                             num_states[num]["otp_code"] = otp_code
