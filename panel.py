@@ -216,8 +216,6 @@ def init_db():
     
     db.services.update_many({"panel_name": {"$exists": False}}, {"$set": {"panel_name": "Zenex"}})
 
-init_db()
-
 def get_primary_admin():
     return str(get_config("PRIMARY_ADMIN_ID", PRIMARY_ADMIN_ID))
 
@@ -227,6 +225,8 @@ def get_config(key, default=None):
 
 def set_config(key, value):
     db.config.update_one({"key": key}, {"$set": {"value": str(value)}}, upsert=True)
+
+init_db()
 
 def is_admin(user_id):
     if str(user_id) == get_primary_admin(): return True
