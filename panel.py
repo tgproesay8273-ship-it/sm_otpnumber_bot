@@ -461,7 +461,7 @@ def admin_panel_keyboard(user_id):
             types.InlineKeyboardButton("💬 Set OTP Forward Group", callback_data="adm_otp_group_id", style="primary"),
             types.InlineKeyboardButton("🎯 Edit Milestones", callback_data="adm_milestone", style="primary"),
             types.InlineKeyboardButton("👮‍♂️ Manage Team", callback_data="adm_manage_admins", style="primary"),
-            types.InlineKeyboardButton("👑 Transfer Ownership", callback_data="adm_transfer_owner", style="danger"),
+            types.InlineKeyboardButton("👑 Transfer Ownership", callback_data="transfer_owner_btn", style="danger"),
             types.InlineKeyboardButton("🎛 Manage Panels", callback_data="adm_panels_menu", style="primary"),
             types.InlineKeyboardButton(notif_text, callback_data="adm_toggle_notif", style="primary")
         )
@@ -972,6 +972,134 @@ def handle_admin_callbacks(call):
         db.admins.update_one({"user_id": target_uid}, {"$set": {"permissions": json.dumps(perms)}})
             
         bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=perms_keyboard(target_uid))
+
+    elif action == "adm_close" or action == "cancel_step":
+        bot.delete_message(chat_id, call.message.message_id)
+        bot.clear_step_handler_by_chat_id(chat_id)
+
+    elif action == "adm_bulk_order":
+        bot.edit_message_text("📦 *Select Target Protocol for Bulk Order:*", chat_id, call.message.message_id, reply_markup=bulk_service_menu_keyboard())
+
+    elif action == "adm_back":
+        total_users = db.users.count_documents({})
+        active_panels = list(db.panels.find({"is_active": True}))
+        pnames = ", ".join([p["panel_name"] for p in active_panels]) if active_panels else "Zenex (Legacy)"
+        msg = f"👥 *Main Control Console V8.0*\n\n_Manage networks, configurations, and user operations seamlessly._\n\n👥 *Total Users:* `{total_users}`\n⚡ *Active Panels:* `{pnames}`"
+        bot.edit_message_text(msg, chat_id, call.message.message_id, reply_markup=admin_panel_keyboard(user_id), parse_mode="Markdown")
+
+    elif action == "adm_upload_txt":
+        if not is_primary_admin(user_id): return bot.answer_callback_query(call.id, "❌ Access Denied", show_alert=True)
+        bot.edit_message_text("📤 *UPLOAD TEXT FILE (.txt)*\n\n_Select a service to upload numbers:_", chat_id, call.message.message_id, reply_markup=upload_txt_keyboard())
+
+    elif action.startswith("up_srv_"):
+        if not is_primary_admin(user_id): return bot.answer_callback_query(call.id, "❌ Access Denied", show_alert=True)
+        srv_name = action.split("up_srv_")[1]
+        msg = bot.send_message(chat_id, f"📤 *Upload .txt file for {srv_name}*", reply_markup=cancel_markup())
+        bot.register_next_step_handler(msg, process_txt_upload, srv_name)
+
+    elif action == "adm_panels_menu":
+        if not is_primary_admin(user_id): return bot.answer_callback_query(call.id, "❌ Access Denied", show_alert=True)
+        bot.edit_message_text("⚙️ *PANEL MANAGEMENT SYSTEM*\n\n_Select a panel to activate it, or add/delete panels:_", chat_id, call.message.message_id, reply_markup=panels_menu_keyboard())
+
+    elif action == "adm_add_panel":
+        if not is_primary_admin(user_id): return bot.answer_callback_query(call.id, "❌ Access Denied", show_alert=True)
+        msg = bot.send_message(chat_id, "➕ *Enter New Panel Details:*\n\nFormat:\n`PanelName|BaseURL|APIKey`\n\n_(Example: `SMSHadi|http://smshadi.net|XYZ123`)_", reply_markup=cancel_markup(), parse_mode="Markdown")
+        bot.register_next_step_handler(msg, process_add_panel)
+
+    elif action == "adm_del_panel":
+        if not is_primary_admin(user_id): return bot.answer_callback_query(call.id, "❌ Access Denied", show_alert=True)
+        bot.edit_message_text("🗑️ *DELETE PANEL*\n\n_Select a panel to delete (Active panel cannot be deleted):_", chat_id, call.message.message_id, reply_markup=panels_del_keyboard())
+
+    elif action.startswith("pnl_toggle_"):
+        if not is_primary_admin(user_id): return bot.answer_callback_query(call.id, "❌ Access Denied", show_alert=True)
+        from bson.objectid import ObjectId
+        p_id = action.split("pnl_toggle_")[1]
+        panel = db.panels.find_one({"_id": ObjectId(p_id)})
+        new_status = not panel.get("is_active", False)
+        p_name = panel.get('panel_name', 'Unknown')
+        
+        if new_status:
+            log_text = f"✅ {p_name} Panel was Activated!"
+        else:
+            log_text = f"❌ {p_name} Panel was Deactivated!"
+            
+        db.panels.update_one({"_id": ObjectId(p_id)}, {"$set": {"is_active": new_status}})
+        bot.answer_callback_query(call.id, log_text, show_alert=False)
+        msg_text = f"⚙️ *PANEL MANAGEMENT SYSTEM*\n\n_Select a panel to activate it, or add/delete panels:_\n\n━━━━━━━━━━━━━━━━━━━\n📡 *System Log:* `{log_text}`\n━━━━━━━━━━━━━━━━━━━"
+        bot.edit_message_text(msg_text, chat_id, call.message.message_id, reply_markup=panels_menu_keyboard(), parse_mode="Markdown")
+
+    elif action.startswith("pnl_del_"):
+        if not is_primary_admin(user_id): return bot.answer_callback_query(call.id, "❌ Access Denied", show_alert=True)
+        from bson.objectid import ObjectId
+        p_id = action.split("pnl_del_")[1]
+        panel_to_del = db.panels.find_one({"_id": ObjectId(p_id)})
+        if panel_to_del and panel_to_del.get("is_active"):
+            bot.answer_callback_query(call.id, "⚠️ Cannot delete an active panel!", show_alert=True)
+        else:
+            db.panels.delete_one({"_id": ObjectId(p_id)})
+            bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=panels_del_keyboard())
+
+    elif action == "adm_stats":
+        if not has_permission(user_id, "stats"): return bot.answer_callback_query(call.id, "❌ Access Denied", show_alert=True)
+        today_date = time.strftime('%Y-%m-%d')
+        today_otps = db.otps_history.count_documents({"date": today_date})
+        total_otps = db.otps_history.count_documents({})
+        one_min_ago = time.time() - 60
+        active_users = db.users.count_documents({"last_active": {"$gte": one_min_ago}})
+        msg = (
+            f"📊 *Live Statistics*\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"🔹 *Today's OTPs:* `{today_otps}`\n"
+            f"🔹 *Total OTPs:* `{total_otps}`\n"
+            f"🔹 *Active Users:* `{active_users}`\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"🎯 *Select a date below to view specific statistics:*"
+        )
+        bot.edit_message_text(msg, chat_id, call.message.message_id, reply_markup=stats_date_keyboard())
+
+    elif action.startswith("statdate_"):
+        if not has_permission(user_id, "stats"): return bot.answer_callback_query(call.id, "❌ Access Denied", show_alert=True)
+        target_date = action.split("_")[1]
+        count = db.otps_history.count_documents({"date": target_date})
+        pipeline = [
+            {"$match": {"date": target_date}},
+            {"$group": {"_id": "$service", "count": {"$sum": 1}}}
+        ]
+        breakdown = list(db.otps_history.aggregate(pipeline))
+        panel_breakdown = "\n".join([f"🔹 {item['_id']}: {item['count']}" for item in breakdown])
+        text = f"📊 *Statistics for {target_date}*\n━━━━━━━━━━━━━━━━━━━\n🎯 *Total OTPs Received:* `{count}`\n\n{panel_breakdown}\n━━━━━━━━━━━━━━━━━━━\n"
+        bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=stats_date_keyboard())
+
+    elif action == "adm_toggle_notif":
+        if not is_primary_admin(user_id): return bot.answer_callback_query(call.id, "❌ Access Denied", show_alert=True)
+        current = get_config("admin_notifications", "1")
+        new_val = "0" if current == "1" else "1"
+        set_config("admin_notifications", new_val)
+        bot.answer_callback_query(call.id, f"Notifications {'Disabled' if new_val == '0' else 'Enabled'}!", show_alert=False)
+        total_users = db.users.count_documents({})
+        active_panels = list(db.panels.find({"is_active": True}))
+        pnames = ", ".join([p["panel_name"] for p in active_panels]) if active_panels else "Zenex (Legacy)"
+        msg = f"👥 *Main Control Console V8.0*\n\n_Manage networks, configurations, and user operations seamlessly._\n\n👥 *Total Users:* `{total_users}`\n⚡ *Active Panels:* `{pnames}`"
+        bot.edit_message_text(msg, chat_id, call.message.message_id, reply_markup=admin_panel_keyboard(user_id), parse_mode="Markdown")
+
+    elif action == "adm_stockouts":
+        recent_logs = list(db.stock_outs.find().sort("timestamp", -1).limit(10))
+        if not recent_logs:
+            text = "⚠️ *No recent stockouts recorded.*"
+        else:
+            text = "⚠️ *Recent Stock Out Logs:*\n\n"
+            for log in recent_logs:
+                from datetime import datetime
+                dt = datetime.fromtimestamp(log.get("timestamp", 0)).strftime('%Y-%m-%d %H:%M')
+                text += f"🔹 `{dt}` - *{log.get('service_name')}* (+{log.get('range')}000000)\n"
+        text += "\n_Showing last 10 entries._"
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔙 Return to Home", callback_data="adm_back"))
+        bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
+
+    elif action == "adm_ranges_menu":
+        if not has_permission(user_id, "ranges"): return bot.answer_callback_query(call.id, "❌ Access Denied", show_alert=True)
+        bot.edit_message_text("⚙️ *ROUTE MANAGEMENT SYSTEM*\n\n_Select an action to modify network routes:_", chat_id, call.message.message_id, reply_markup=admin_ranges_keyboard())
 
 def process_add_panel(message):
     if message.text == "/cancel": return
@@ -1589,134 +1717,6 @@ def handle_withdrawal_actions(call):
         bot.edit_message_text(call.message.text + "\n\n❌ *STATUS: REFUNDED*", call.message.chat.id, call.message.message_id, reply_markup=None)
         try: bot.send_message(target_uid, f"🔴 *আপনার উইথড্রাল রিকোয়েস্টটি বাতিল হয়েছে!*\n💰 Amount: `{amount}` ৳ রিফান্ড করা হয়েছে।")
         except: pass
-
-    elif action == "adm_close" or action == "cancel_step":
-        bot.delete_message(chat_id, call.message.message_id)
-        bot.clear_step_handler_by_chat_id(chat_id)
-
-    elif action == "adm_bulk_order":
-        bot.edit_message_text("📦 *Select Target Protocol for Bulk Order:*", chat_id, call.message.message_id, reply_markup=bulk_service_menu_keyboard())
-
-    elif action == "adm_back":
-        total_users = db.users.count_documents({})
-        active_panels = list(db.panels.find({"is_active": True}))
-        pnames = ", ".join([p["panel_name"] for p in active_panels]) if active_panels else "Zenex (Legacy)"
-        msg = f"👥 *Main Control Console V8.0*\n\n_Manage networks, configurations, and user operations seamlessly._\n\n👥 *Total Users:* `{total_users}`\n⚡ *Active Panels:* `{pnames}`"
-        bot.edit_message_text(msg, chat_id, call.message.message_id, reply_markup=admin_panel_keyboard(user_id), parse_mode="Markdown")
-
-    elif action == "adm_upload_txt":
-        if not is_primary_admin(user_id): return bot.answer_callback_query(call.id, "❌ Access Denied", show_alert=True)
-        bot.edit_message_text("📤 *UPLOAD TEXT FILE (.txt)*\n\n_Select a service to upload numbers:_", chat_id, call.message.message_id, reply_markup=upload_txt_keyboard())
-
-    elif action.startswith("up_srv_"):
-        if not is_primary_admin(user_id): return bot.answer_callback_query(call.id, "❌ Access Denied", show_alert=True)
-        srv_name = action.split("up_srv_")[1]
-        msg = bot.send_message(chat_id, f"📤 *Upload .txt file for {srv_name}*", reply_markup=cancel_markup())
-        bot.register_next_step_handler(msg, process_txt_upload, srv_name)
-
-    elif action == "adm_panels_menu":
-        if not is_primary_admin(user_id): return bot.answer_callback_query(call.id, "❌ Access Denied", show_alert=True)
-        bot.edit_message_text("⚙️ *PANEL MANAGEMENT SYSTEM*\n\n_Select a panel to activate it, or add/delete panels:_", chat_id, call.message.message_id, reply_markup=panels_menu_keyboard())
-
-    elif action == "adm_add_panel":
-        if not is_primary_admin(user_id): return bot.answer_callback_query(call.id, "❌ Access Denied", show_alert=True)
-        msg = bot.send_message(chat_id, "➕ *Enter New Panel Details:*\n\nFormat:\n`PanelName|BaseURL|APIKey`\n\n_(Example: `SMSHadi|http://smshadi.net|XYZ123`)_", reply_markup=cancel_markup(), parse_mode="Markdown")
-        bot.register_next_step_handler(msg, process_add_panel)
-
-    elif action == "adm_del_panel":
-        if not is_primary_admin(user_id): return bot.answer_callback_query(call.id, "❌ Access Denied", show_alert=True)
-        bot.edit_message_text("🗑️ *DELETE PANEL*\n\n_Select a panel to delete (Active panel cannot be deleted):_", chat_id, call.message.message_id, reply_markup=panels_del_keyboard())
-
-    elif action.startswith("pnl_toggle_"):
-        if not is_primary_admin(user_id): return bot.answer_callback_query(call.id, "❌ Access Denied", show_alert=True)
-        from bson.objectid import ObjectId
-        p_id = action.split("pnl_toggle_")[1]
-        panel = db.panels.find_one({"_id": ObjectId(p_id)})
-        new_status = not panel.get("is_active", False)
-        p_name = panel.get('panel_name', 'Unknown')
-        
-        if new_status:
-            log_text = f"✅ {p_name} Panel was Activated!"
-        else:
-            log_text = f"❌ {p_name} Panel was Deactivated!"
-            
-        db.panels.update_one({"_id": ObjectId(p_id)}, {"$set": {"is_active": new_status}})
-        bot.answer_callback_query(call.id, log_text, show_alert=False)
-        msg_text = f"⚙️ *PANEL MANAGEMENT SYSTEM*\n\n_Select a panel to activate it, or add/delete panels:_\n\n━━━━━━━━━━━━━━━━━━━\n📡 *System Log:* `{log_text}`\n━━━━━━━━━━━━━━━━━━━"
-        bot.edit_message_text(msg_text, chat_id, call.message.message_id, reply_markup=panels_menu_keyboard(), parse_mode="Markdown")
-
-    elif action.startswith("pnl_del_"):
-        if not is_primary_admin(user_id): return bot.answer_callback_query(call.id, "❌ Access Denied", show_alert=True)
-        from bson.objectid import ObjectId
-        p_id = action.split("pnl_del_")[1]
-        panel_to_del = db.panels.find_one({"_id": ObjectId(p_id)})
-        if panel_to_del and panel_to_del.get("is_active"):
-            bot.answer_callback_query(call.id, "⚠️ Cannot delete an active panel!", show_alert=True)
-        else:
-            db.panels.delete_one({"_id": ObjectId(p_id)})
-            bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=panels_del_keyboard())
-
-    elif action == "adm_stats":
-        if not has_permission(user_id, "stats"): return bot.answer_callback_query(call.id, "❌ Access Denied", show_alert=True)
-        today_date = time.strftime('%Y-%m-%d')
-        today_otps = db.otps_history.count_documents({"date": today_date})
-        total_otps = db.otps_history.count_documents({})
-        one_min_ago = time.time() - 60
-        active_users = db.users.count_documents({"last_active": {"$gte": one_min_ago}})
-        msg = (
-            f"📊 *Live Statistics*\n"
-            f"━━━━━━━━━━━━━━━━━━━\n"
-            f"🔹 *Today's OTPs:* `{today_otps}`\n"
-            f"🔹 *Total OTPs:* `{total_otps}`\n"
-            f"🔹 *Active Users:* `{active_users}`\n"
-            f"━━━━━━━━━━━━━━━━━━━\n"
-            f"🎯 *Select a date below to view specific statistics:*"
-        )
-        bot.edit_message_text(msg, chat_id, call.message.message_id, reply_markup=stats_date_keyboard())
-
-    elif action.startswith("statdate_"):
-        if not has_permission(user_id, "stats"): return bot.answer_callback_query(call.id, "❌ Access Denied", show_alert=True)
-        target_date = action.split("_")[1]
-        count = db.otps_history.count_documents({"date": target_date})
-        pipeline = [
-            {"$match": {"date": target_date}},
-            {"$group": {"_id": "$service", "count": {"$sum": 1}}}
-        ]
-        breakdown = list(db.otps_history.aggregate(pipeline))
-        panel_breakdown = "\n".join([f"🔹 {item['_id']}: {item['count']}" for item in breakdown])
-        text = f"📊 *Statistics for {target_date}*\n━━━━━━━━━━━━━━━━━━━\n🎯 *Total OTPs Received:* `{count}`\n\n{panel_breakdown}\n━━━━━━━━━━━━━━━━━━━\n"
-        bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=stats_date_keyboard())
-
-    elif action == "adm_toggle_notif":
-        if not is_primary_admin(user_id): return bot.answer_callback_query(call.id, "❌ Access Denied", show_alert=True)
-        current = get_config("admin_notifications", "1")
-        new_val = "0" if current == "1" else "1"
-        set_config("admin_notifications", new_val)
-        bot.answer_callback_query(call.id, f"Notifications {'Disabled' if new_val == '0' else 'Enabled'}!", show_alert=False)
-        total_users = db.users.count_documents({})
-        active_panels = list(db.panels.find({"is_active": True}))
-        pnames = ", ".join([p["panel_name"] for p in active_panels]) if active_panels else "Zenex (Legacy)"
-        msg = f"👥 *Main Control Console V8.0*\n\n_Manage networks, configurations, and user operations seamlessly._\n\n👥 *Total Users:* `{total_users}`\n⚡ *Active Panels:* `{pnames}`"
-        bot.edit_message_text(msg, chat_id, call.message.message_id, reply_markup=admin_panel_keyboard(user_id), parse_mode="Markdown")
-
-    elif action == "adm_stockouts":
-        recent_logs = list(db.stock_outs.find().sort("timestamp", -1).limit(10))
-        if not recent_logs:
-            text = "⚠️ *No recent stockouts recorded.*"
-        else:
-            text = "⚠️ *Recent Stock Out Logs:*\n\n"
-            for log in recent_logs:
-                from datetime import datetime
-                dt = datetime.fromtimestamp(log.get("timestamp", 0)).strftime('%Y-%m-%d %H:%M')
-                text += f"🔹 `{dt}` - *{log.get('service_name')}* (+{log.get('range')}000000)\n"
-        text += "\n_Showing last 10 entries._"
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("🔙 Return to Home", callback_data="adm_back"))
-        bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
-
-    elif action == "adm_ranges_menu":
-        if not has_permission(user_id, "ranges"): return bot.answer_callback_query(call.id, "❌ Access Denied", show_alert=True)
-        bot.edit_message_text("⚙️ *ROUTE MANAGEMENT SYSTEM*\n\n_Select an action to modify network routes:_", chat_id, call.message.message_id, reply_markup=admin_ranges_keyboard())
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("bsrv_") or call.data == "back_to_bulk_services")
 def handle_bulk_service_selection(call):
@@ -2406,7 +2406,7 @@ def handle_adm_resign(call):
     try: bot.edit_message_text("✅ You are no longer an admin. Access revoked.", call.message.chat.id, call.message.message_id)
     except: pass
 
-@bot.callback_query_handler(func=lambda call: call.data == "adm_transfer_owner")
+@bot.callback_query_handler(func=lambda call: call.data == "transfer_owner_btn")
 def handle_transfer_owner(call):
     user_id = str(call.from_user.id)
     if not is_primary_admin(user_id):
