@@ -857,6 +857,17 @@ def handle_admin_callbacks(call):
             api_key = mino_panel['api_key']
             res = http_session.get(f"{base}/liveaccess?api_key={api_key}", timeout=10).json()
             
+            # Read console to figure out FB vs IG
+            console_res = http_session.get(f"{base}/console?api_key={api_key}", timeout=10).json()
+            ig_ranges = set()
+            fb_ranges = set()
+            for item in console_res.get("data", []):
+                if str(item.get("service", "")).upper() == "FACEBOOK":
+                    msg = str(item.get("message", "")).lower()
+                    r_val = str(item.get("range", ""))
+                    if "instagram" in msg or "ig" in msg: ig_ranges.add(r_val)
+                    if "facebook" in msg or "fb" in msg: fb_ranges.add(r_val)
+            
             services_data = res.get("data", {}).get("services", [])
             added_count = 0
             import time
@@ -864,15 +875,17 @@ def handle_admin_callbacks(call):
                 sid = str(svc.get("sid", ""))
                 ranges = svc.get("ranges", [])
                 
-                # MinoSMS groups FB/IG under FACEBOOK. We will add both!
-                targets = []
-                if sid.upper() == "FACEBOOK":
-                    targets = ["Facebook", "Instagram"]
-                else:
-                    targets = [sid]
+                for target_range in ranges:
+                    targets = []
+                    if sid.upper() == "FACEBOOK":
+                        if target_range in ig_ranges: targets.append("Instagram")
+                        if target_range in fb_ranges: targets.append("Facebook")
+                        # If no recent history, add to Facebook as fallback to avoid losing ranges
+                        if not targets: targets = ["Facebook"]
+                    else:
+                        continue # Only processing FB/IG based on user request
                 
-                for target_service in targets:
-                    for target_range in ranges:
+                    for target_service in targets:
                         clean_range = target_range.replace("X", "0").replace("x", "0")
                         try:
                             from panel import get_country_info
@@ -1052,7 +1065,7 @@ def handle_admin_callbacks(call):
 
     elif action == "adm_panels_menu":
         if not is_primary_admin(user_id): return bot.answer_callback_query(call.id, "❌ Access Denied", show_alert=True)
-        bot.edit_message_text("⚙️ *PANEL MANAGEMENT SYSTEM*\n\n_Select a panel to activate it, or add/delete panels:_", chat_id, call.message.message_id, reply_markup=panels_menu_keyboard())
+        bot.edit_message_text("⚙️ *PANEL MANAGEMENT SYSTEM*\n\n_Select a panel to activate it, or add/delete panels:_", chat_id, call.message.message_id, reply_markup=panels_menu_keyboard(), parse_mode="Markdown")
 
     elif action == "adm_add_panel":
         if not is_primary_admin(user_id): return bot.answer_callback_query(call.id, "❌ Access Denied", show_alert=True)
@@ -2274,13 +2287,9 @@ def free_poll_otp_thread(chat_id, message_id, allocated_numbers, service_name, u
                             # MINOSMS Facebook/Instagram filter
                             if "mino" in base_url.lower():
                                 lower_sms = raw_sms.lower()
-                                if service_name.lower() == "instagram":
-                                    if "instagram" not in lower_sms and "ig" not in lower_sms:
+                                if service_name.lower() in ["instagram", "facebook"]:
+                                    if not any(kw in lower_sms for kw in ["instagram", "ig", "facebook", "fb"]):
                                         continue
-                                if service_name.lower() == "facebook":
-                                    if "facebook" not in lower_sms and "fb" not in lower_sms:
-                                        continue
-                                        
                             otp_digits = re.search(r'\b\d{4,8}\b', raw_sms)
                             otp_code = otp_digits.group(0) if otp_digits else "".join(re.findall(r'\d+', raw_sms))[:6]
                             
