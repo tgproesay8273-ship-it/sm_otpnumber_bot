@@ -423,6 +423,11 @@ def country_menu_keyboard(service_name):
                 c_range = c_range.encode('utf-8')[:64 - len(base_cb.encode('utf-8'))].decode('utf-8', 'ignore')
             cb_data = f"{base_cb}{c_range}"
             buttons.append(types.InlineKeyboardButton(c_name, callback_data=cb_data, style="danger"))
+        else:
+            cb_data = f"sel_{service_name}_{c.get('country_name', 'Unknown')}"
+            if len(cb_data.encode('utf-8')) > 64:
+                cb_data = cb_data.encode('utf-8')[:64].decode('utf-8', 'ignore')
+            buttons.append(types.InlineKeyboardButton(c_name, callback_data=cb_data, style="primary"))
         
     for btn in buttons:
         markup.add(btn)
