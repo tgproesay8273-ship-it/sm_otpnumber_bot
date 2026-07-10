@@ -211,6 +211,9 @@ def init_db():
     if not db.panels.find_one({"panel_name": "Stexsms"}):
         db.panels.insert_one({"panel_name": "Stexsms", "base_url": "https://stexsms.com", "api_key": "MZ6H5CL0O6K", "is_active": False, "is_manual": False})
         
+    if not db.panels.find_one({"panel_name": "MinoSMS"}):
+        db.panels.insert_one({"panel_name": "MinoSMS", "base_url": "http://mino-sms-panel.xyz", "api_key": "ENTER_YOUR_API_KEY_HERE", "is_active": False, "is_manual": False})
+        
     db.panels.update_many({"panel_name": "Zenex", "is_manual": {"$exists": False}}, {"$set": {"is_manual": False}})
     db.panels.update_many({"panel_name": "SMSHadi", "is_manual": {"$exists": False}}, {"$set": {"is_manual": True}})
     
@@ -532,6 +535,7 @@ def admin_ranges_keyboard():
     markup.add(types.InlineKeyboardButton("➕ Add New Routing Service", callback_data="adm_add_service", style="danger"))
     markup.add(types.InlineKeyboardButton("🔄 Auto Range Scan (Zenex)", callback_data="adm_scan_zenex", style="primary"))
     markup.add(types.InlineKeyboardButton("🔄 Auto Range Scan (Stexsms)", callback_data="adm_scan_stex", style="primary"))
+    markup.add(types.InlineKeyboardButton("🔄 Auto Range Scan (MinoSMS)", callback_data="adm_scan_minosms", style="primary"))
     markup.add(types.InlineKeyboardButton("🔙 Return to Home", callback_data="adm_back", style="primary"))
     markup.add(types.InlineKeyboardButton("❌ Close", callback_data="cancel_step", style="danger"))
     return markup
@@ -840,6 +844,55 @@ def handle_admin_callbacks(call):
                 bot.send_message(chat_id, f"❌ Stexsms Console returned no recent OTPs.")
         except Exception as e:
             bot.send_message(chat_id, f"❌ Stexsms Sync failed: {e}")
+
+    elif action == "adm_scan_minosms":
+        if not has_permission(user_id, "ranges"): return bot.answer_callback_query(call.id, "🔴 Access Denied", show_alert=True)
+        bot.answer_callback_query(call.id, "⏳ Scanning MinoSMS API for active routes...")
+        try:
+            mino_panel = db.panels.find_one({"panel_name": "MinoSMS"})
+            if not mino_panel:
+                bot.send_message(chat_id, "❌ MinoSMS panel not found in DB.")
+                return
+            base = mino_panel['base_url'].rstrip('/')
+            api_key = mino_panel['api_key']
+            res = http_session.get(f"{base}/liveaccess?api_key={api_key}", timeout=10).json()
+            
+            services_data = res.get("data", {}).get("services", [])
+            added_count = 0
+            import time
+            for svc in services_data:
+                sid = str(svc.get("sid", ""))
+                ranges = svc.get("ranges", [])
+                
+                # MinoSMS groups FB/IG under FACEBOOK. We will add both!
+                targets = []
+                if sid.upper() == "FACEBOOK":
+                    targets = ["Facebook", "Instagram"]
+                else:
+                    targets = [sid]
+                
+                for target_service in targets:
+                    for target_range in ranges:
+                        clean_range = target_range.replace("X", "0").replace("x", "0")
+                        try:
+                            from panel import get_country_info
+                            name, flag, _ = get_country_info("+" + clean_range + "0000000")
+                            short_name = name.split()[0][:8] if name else "Unknown"
+                            c_name = f"{flag} {short_name} | 🔥 Auto"
+                        except:
+                            c_name = f"🔥 Auto"
+                        
+                        db.services.update_one(
+                            {"service_name": target_service, "range": target_range, "panel_name": "MinoSMS"},
+                            {"$set": {"country_name": c_name, "panel_name": "MinoSMS", "hits": 20, "last_updated": time.time()}},
+                            upsert=True
+                        )
+                        added_count += 1
+                        
+            bot.send_message(chat_id, f"✅ *MinoSMS Scan Complete!*\nProcessed and added/updated {added_count} active ranges successfully.")
+        except Exception as e:
+            bot.send_message(chat_id, f"❌ MinoSMS Sync failed: {e}")
+
 
     elif action.startswith("remrng_"):
         if not has_permission(user_id, "ranges"): return bot.answer_callback_query(call.id, "🔴 Access Denied", show_alert=True)
@@ -1887,14 +1940,22 @@ def threaded_getnum_retry(chat_id, user_id, service_name, country_node, s_row, l
     while time.time() - start_time < max_duration:
         try:
             with api_request_lock:
-                # First request
-                response_raw = http_session.post(api_url, json=payload, headers=get_api_headers(active_panel['api_key']), timeout=12)
-                response = response_raw.json()
+                if active_panel.get('panel_name') == 'MinoSMS':
+                    api_key = active_panel['api_key']
+                    mino_url = f"{base_url}/getnumber?api_key={api_key}&rid={target_range}"
+                    response_raw = http_session.get(mino_url, timeout=12)
+                    response = response_raw.json()
+                    if response.get("number") or response.get("phone") or str(response.get("data", {}).get("number", "")):
+                        response["meta"] = {"status": "success"}
+                        response["data"] = {"number": response.get("number") or response.get("phone") or response.get("data", {}).get("number")}
+                else:
+                    response_raw = http_session.post(api_url, json=payload, headers=get_api_headers(active_panel['api_key']), timeout=12)
+                    response = response_raw.json()
                 
                 # Try second request if first succeeds
                 response_raw_2 = None
                 response_2 = {}
-                if response_raw.status_code == 200 and response.get("meta", {}).get("status") in ["success", "ok"]:
+                if active_panel.get('panel_name') != 'MinoSMS' and response_raw.status_code == 200 and response.get("meta", {}).get("status") in ["success", "ok"]:
                     try:
                         response_raw_2 = http_session.post(api_url, json=payload, headers=get_api_headers(active_panel['api_key']), timeout=12)
                         response_2 = response_raw_2.json()
@@ -2178,12 +2239,25 @@ def free_poll_otp_thread(chat_id, message_id, allocated_numbers, service_name, u
             break
             
         try:
-            res_raw = http_session.get(check_url, headers=get_api_headers(api_key), timeout=8)
-            try:
-                res = res_raw.json()
-            except ValueError:
-                time.sleep(2)
-                continue
+            if "mino" in base_url.lower():
+                otp_list = []
+                for n_val in allocated_numbers:
+                    if num_states[n_val]["status"] == "waiting":
+                        try:
+                            chk_res = http_session.get(f"{base_url}/check?api_key={api_key}&number={n_val}", timeout=8).json()
+                            msg = chk_res.get("sms") or chk_res.get("message") or chk_res.get("data", {}).get("message")
+                            if msg:
+                                otp_list.append({"number": n_val, "sms": msg})
+                        except: pass
+                res_raw = type('obj', (object,), {'status_code': 200})()
+                res = {"meta": {"status": "success"}, "data": {"otps": otp_list}}
+            else:
+                res_raw = http_session.get(check_url, headers=get_api_headers(api_key), timeout=8)
+                try:
+                    res = res_raw.json()
+                except ValueError:
+                    time.sleep(2)
+                    continue
             
             ui_needs_update = False
             
@@ -2196,6 +2270,17 @@ def free_poll_otp_thread(chat_id, message_id, allocated_numbers, service_name, u
                     for num in allocated_numbers:
                         if num_states[num]["status"] == "waiting" and (num_val in str(num) or str(num) in num_val):
                             raw_sms = str(item.get("otp") or item.get("sms") or item.get("message") or "")
+                            
+                            # MINOSMS Facebook/Instagram filter
+                            if "mino" in base_url.lower():
+                                lower_sms = raw_sms.lower()
+                                if service_name.lower() == "instagram":
+                                    if "instagram" not in lower_sms and "ig" not in lower_sms:
+                                        continue
+                                if service_name.lower() == "facebook":
+                                    if "facebook" not in lower_sms and "fb" not in lower_sms:
+                                        continue
+                                        
                             otp_digits = re.search(r'\b\d{4,8}\b', raw_sms)
                             otp_code = otp_digits.group(0) if otp_digits else "".join(re.findall(r'\d+', raw_sms))[:6]
                             
