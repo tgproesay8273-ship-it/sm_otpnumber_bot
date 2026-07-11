@@ -372,6 +372,8 @@ def service_menu_keyboard():
     services = db.services.distinct("service_name", {"panel_name": active_pname})
         
     for srv_name in services:
+        if not any(kw in srv_name.lower() for kw in ["instagram", "facebook", "ig", "fb"]):
+            continue
         icon = "📸" if "instagram" in srv_name.lower() else "📘" if "facebook" in srv_name.lower() else "💬"
         markup.add(types.InlineKeyboardButton(f"{icon} {srv_name} Premium", callback_data=f"srv_{srv_name}", style="danger"))
     markup.add(types.InlineKeyboardButton("❌ Close", callback_data="cancel_step", style="danger"))
@@ -388,24 +390,22 @@ def country_menu_keyboard(service_name):
         
     countries = list(db.services.find({"service_name": service_name, "panel_name": active_pname, "hits": {"$gt": 0}}).sort([("hits", -1)]).limit(60))
     
-    country_totals = {}
+    unique_countries = []
+    seen = set()
     for c in countries:
         c_part = c.get('country_name', '').split(" | ")[0]
-        country_totals[c_part] = country_totals.get(c_part, 0) + 1
-        
-    country_seen = {}
+        if c_part not in seen:
+            seen.add(c_part)
+            unique_countries.append(c)
+            
     buttons = []
-    for idx_c, c in enumerate(countries):
+    for idx_c, c in enumerate(unique_countries):
         raw_c_name = c.get('country_name', 'Unknown')
         parts = raw_c_name.split(" | ")
         c_part = parts[0]
         hits_part = parts[1] if len(parts) > 1 else ""
         
         display_name = c_part
-        if country_totals.get(c_part, 0) > 1:
-            country_seen[c_part] = country_seen.get(c_part, 0) + 1
-            idx = country_seen[c_part]
-            display_name = f"{c_part} {idx}"
             
         if idx_c == 0:
             display_name = f"👑 {display_name}"
@@ -560,6 +560,8 @@ def bulk_service_menu_keyboard():
     services = db.services.distinct("service_name")
         
     for srv_name in services:
+        if not any(kw in srv_name.lower() for kw in ["instagram", "facebook", "ig", "fb"]):
+            continue
         icon = "📸" if "instagram" in srv_name.lower() else "📘" if "facebook" in srv_name.lower() else "💬"
         markup.add(types.InlineKeyboardButton(f"{icon} {srv_name} Bulk", callback_data=f"bsrv_{srv_name}", style="danger"))
     markup.add(types.InlineKeyboardButton("❌ Close", callback_data="cancel_step", style="danger"))
@@ -570,9 +572,13 @@ def bulk_country_menu_keyboard(service_name):
     countries = db.services.find({"service_name": service_name})
         
     buttons = []
+    seen = set()
     for c in countries:
         c_name = c['country_name']
-        buttons.append(types.InlineKeyboardButton(c_name, callback_data=f"bsel_{service_name}_{c_name}", style="danger"))
+        c_part = c_name.split(" | ")[0]
+        if c_part not in seen:
+            seen.add(c_part)
+            buttons.append(types.InlineKeyboardButton(c_part, callback_data=f"bsel_{service_name}_{c_name}", style="danger"))
     
     markup.add(*buttons)
     markup.add(types.InlineKeyboardButton("🔙 Back to Services", callback_data="back_to_bulk_services", style="danger"))
@@ -1934,7 +1940,7 @@ def bulk_free_poll_otp_thread(chat_id, success_numbers, service_name, user_id, b
                                     except: pass
             except:
                 pass
-        time.sleep(3)
+        time.sleep(1)
 
 def threaded_getnum_retry(chat_id, user_id, service_name, country_node, s_row, loading_msg_id, tried_ranges=None):
     if tried_ranges is None:
@@ -2274,7 +2280,7 @@ def free_poll_otp_thread(chat_id, message_id, allocated_numbers, service_name, u
                 try:
                     res = res_raw.json()
                 except ValueError:
-                    time.sleep(2)
+                    time.sleep(1)
                     continue
             
             ui_needs_update = False
@@ -2354,7 +2360,7 @@ def free_poll_otp_thread(chat_id, message_id, allocated_numbers, service_name, u
                 
         except Exception as poll_err:
             logger.error(f"OTP Poll Error: {poll_err}")
-        time.sleep(2)  
+        time.sleep(1)  
     
     # Mark remaining as expired
     ui_needs_update = False
