@@ -739,8 +739,11 @@ def handle_admin_callbacks(call):
             added_count = 0
             for otp in otps:
                 sid = str(otp.get("sid", "")).lower()
-                if "facebook" in sid: service_name = "Facebook"
+                msg_text = str(otp.get("message", "")).lower()
+                if "instagram" in msg_text: service_name = "Instagram"
+                elif "facebook" in msg_text: service_name = "Facebook"
                 elif "instagram" in sid: service_name = "Instagram"
+                elif "facebook" in sid: service_name = "Facebook"
                 else: continue
                     
                 target_range = str(otp.get("range", ""))
@@ -829,8 +832,11 @@ def handle_admin_callbacks(call):
             stex_hits = {}
             for otp in otps:
                 sid = str(otp.get("sid", "")).lower()
-                if "facebook" in sid: service_name = "Facebook"
+                msg_text = str(otp.get("message", "")).lower()
+                if "instagram" in msg_text: service_name = "Instagram"
+                elif "facebook" in msg_text: service_name = "Facebook"
                 elif "instagram" in sid: service_name = "Instagram"
+                elif "facebook" in sid: service_name = "Facebook"
                 else: continue
                 target_range = str(otp.get("range", ""))
                 if not target_range: continue
@@ -2292,7 +2298,7 @@ def free_poll_otp_thread(chat_id, message_id, allocated_numbers, service_name, u
             ui_needs_update = False
             
             if res_raw.status_code == 200 and isinstance(res, dict) and res.get("meta", {}).get("status") in ["success", "ok"]:
-                otp_list = res.get("data", {}).get("otps", [])
+                otp_list = res.get("data", {}).get("otps", res.get("data", {}).get("hits", []))
                 
                 for item in otp_list:
                     num_val = str(item.get("number") or item.get("phone") or item.get("phone_number") or "")
@@ -2435,8 +2441,11 @@ def auto_route_updater_thread():
                     stex_hits = {}
                     for otp in otps:
                         sid = str(otp.get("sid", "")).lower()
-                        if "facebook" in sid: service_name = "Facebook"
+                        msg_text = str(otp.get("message", "")).lower()
+                        if "instagram" in msg_text: service_name = "Instagram"
+                        elif "facebook" in msg_text: service_name = "Facebook"
                         elif "instagram" in sid: service_name = "Instagram"
+                        elif "facebook" in sid: service_name = "Facebook"
                         else: continue
                         target_range = str(otp.get("range", ""))
                         if not target_range: continue
