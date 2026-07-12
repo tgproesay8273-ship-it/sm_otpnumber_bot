@@ -731,7 +731,10 @@ def handle_admin_callbacks(call):
         api_key = stex_panel['api_key']
         headers = {'mauthapi': api_key}
         try:
-            res = http_session.get(base + '/console', headers=headers, timeout=10).json()
+            _res = http_session.get(base + '/console', headers=headers, timeout=10)
+            if _res.status_code != 200: raise Exception(f"API Error HTTP {_res.status_code}")
+            try: res = _res.json()
+            except: raise Exception("Invalid JSON response from API")
             otps = res.get("data", {}).get("otps", [])
             added_count = 0
             for otp in otps:
@@ -817,7 +820,10 @@ def handle_admin_callbacks(call):
             
             base = stex_panel['base_url'].rstrip('/')
             headers = {'mauthapi': stex_panel['api_key']}
-            res = http_session.get(base + '/console', headers=headers, timeout=10).json()
+            _res = http_session.get(base + '/console', headers=headers, timeout=10)
+            if _res.status_code != 200: raise Exception(f"API Error HTTP {_res.status_code}")
+            try: res = _res.json()
+            except: raise Exception("Invalid JSON response from API")
             otps = res.get("data", {}).get("otps", [])
             
             stex_hits = {}
@@ -2421,7 +2427,10 @@ def auto_route_updater_thread():
                 try:
                     base = stex_panel['base_url'].rstrip('/')
                     headers = {'mauthapi': stex_panel['api_key']}
-                    res = http_session.get(base + '/console', headers=headers, timeout=10).json()
+                    _res = http_session.get(base + '/console', headers=headers, timeout=10)
+                    if _res.status_code != 200: raise Exception(f"API Error HTTP {_res.status_code}")
+                    try: res = _res.json()
+                    except: raise Exception("Invalid JSON response from API")
                     otps = res.get("data", {}).get("otps", [])
                     stex_hits = {}
                     for otp in otps:
