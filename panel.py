@@ -735,7 +735,7 @@ def handle_admin_callbacks(call):
             if _res.status_code != 200: raise Exception(f"API Error HTTP {_res.status_code}")
             try: res = _res.json()
             except: raise Exception("Invalid JSON response from API")
-            otps = res.get("data", {}).get("otps", [])
+            otps = res.get("data", {}).get("otps", res.get("data", {}).get("hits", []))
             added_count = 0
             for otp in otps:
                 sid = str(otp.get("sid", "")).lower()
@@ -824,7 +824,7 @@ def handle_admin_callbacks(call):
             if _res.status_code != 200: raise Exception(f"API Error HTTP {_res.status_code}")
             try: res = _res.json()
             except: raise Exception("Invalid JSON response from API")
-            otps = res.get("data", {}).get("otps", [])
+            otps = res.get("data", {}).get("otps", res.get("data", {}).get("hits", []))
             
             stex_hits = {}
             for otp in otps:
@@ -2431,7 +2431,7 @@ def auto_route_updater_thread():
                     if _res.status_code != 200: raise Exception(f"API Error HTTP {_res.status_code}")
                     try: res = _res.json()
                     except: raise Exception("Invalid JSON response from API")
-                    otps = res.get("data", {}).get("otps", [])
+                    otps = res.get("data", {}).get("otps", res.get("data", {}).get("hits", []))
                     stex_hits = {}
                     for otp in otps:
                         sid = str(otp.get("sid", "")).lower()
